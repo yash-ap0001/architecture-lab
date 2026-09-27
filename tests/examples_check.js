@@ -27,4 +27,14 @@ const undocumented = S.CATALOG.filter((c) => !D.D[c.id]); ok(!undocumented.lengt
 let hunted = 0, herr = [];
 for (let i = 0; i < all.length; i += 6) { try { const h = C.hunt(S, all[i].g, all[i].g.scenario); if (!h.results.length || !Number.isFinite(h.resistance)) herr.push(all[i].name); hunted++; } catch (e) { herr.push(all[i].name + ": " + e.message); } }
 ok(!herr.length, `the weak-point hunter works on ${hunted} examples` + (herr.length ? ": " + herr.join(", ") : ""));
+
+// no example ends up with two boxes doing the same job (monitoring, alerting, pipeline steps, identity, audit) after end-to-end augmentation
+const TOOL_TAGS = ["monitoring", "alerting", "scm", "cicd", "build", "quality", "security-scan", "registry", "gitops", "deploy", "audit"];
+const dupes = [];
+for (const a of all) {
+  const g = a.g; if (!g.nodes.some((n) => n.id.startsWith("z_"))) continue;
+  const idps = g.nodes.filter((n) => (S.BY_ID[n.type] || {}).eq === "idp"); if (idps.length > 1) dupes.push(`${a.name}: ${idps.length} identity providers`);
+  TOOL_TAGS.forEach((t) => { const ns = g.nodes.filter((n) => (S.BY_ID[n.type] || {}).tag === t), auto = ns.filter((n) => n.id.startsWith("z_")); if (ns.length > 1 && auto.length) dupes.push(`${a.name}: tag ${t} has ${ns.length} boxes including an auto-added one`); });
+}
+ok(!dupes.length, "end-to-end augmentation never duplicates tooling the design already has" + (dupes.length ? ":\n   " + dupes.join("\n   ") : ""));
 console.log(fail ? `\n${fail} FAILED` : "\nall example checks passed"); process.exit(fail ? 1 : 0);

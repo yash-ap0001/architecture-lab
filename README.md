@@ -89,3 +89,5 @@ Hover any component and, under its explanation, you see when to pick it, when to
 ## Every example is end to end
 
 Every example in the Sandbox (the 9 Classics and the 121 examples, but not the "fix me" puzzles and not the 10 full platform architectures, which already are end-to-end) now gets central authentication, an audit bus and append-only audit store, monitoring with alerting, and the build/deploy pipeline wired on automatically (`LabExamples.endToEnd`, applied in `build()` and in the Classics wrapper in `sandbox.js`). The goals (p95 and budget) are adjusted to account for the extra hops and cost. The "New board" starter stays a true blank canvas.
+
+End-to-end augmentation now reuses tooling a design already has (identity provider, audit store, monitoring, alerting, pipeline steps) instead of adding a duplicate, and gives the reused box enough extra capacity for the new load. `node tests/examples_check.js` checks no example ends up with two boxes doing the same job.

@@ -323,21 +323,30 @@
     const base = (g.scenario && g.scenario.base) || 500, shape = g.scenario && g.scenario.shape;
     const peak = base * (shape === "spike" ? (g.scenario.spikeX || 4) : shape === "diurnal" ? 1.5 : shape === "ramp" ? 1.3 : 1.15);
     const idpInst = Math.max(2, Math.ceil(peak / 350)), auditQps = peak * 0.15, workerInst = Math.max(2, Math.ceil(auditQps / 220)), busWorkers = Math.max(2, Math.ceil(auditQps / 900));
-    const maxY = Math.max(0, ...g.nodes.map((n) => n.y)), rowY = maxY + 130, row2Y = rowY + 95;
-    const row1 = [["z_idp", "keycloak", { name: "Central auth server", inst: idpInst }], ["z_bus", "kafka", { name: "Audit bus", workers: busWorkers }], ["z_aw", "worker", { name: "Audit writer", inst: workerInst, auto: true }], ["z_al", "auditlog", { name: "Audit log store", inst: 2 }], ["z_mo", "prometheus", {}], ["z_pd", "pagerduty", {}]];
-    const row2 = [["z_gr", "gitrepo", {}], ["z_ci", "githubactions", {}], ["z_mv", "maven", {}], ["z_sq", "sonarqube", {}], ["z_sn", "snyk", {}], ["z_tv", "trivy", {}], ["z_er", "dockerregistry", {}], ["z_cd", "argocd", {}]];
-    const extraNodes = [];
-    row1.forEach(([id, type, props], i) => extraNodes.push({ id, type, x: 80 + i * 195, y: rowY, props: Object.assign({ name: type }, props) }));
-    row2.forEach(([id, type, props], i) => extraNodes.push({ id, type, x: 80 + i * 195, y: row2Y, props: Object.assign({ name: type }, props) }));
-    const extraEdges = [
-      { from: entry, to: "z_idp", fan: true, w: 1 },
-      { from: entry, to: "z_bus", fan: true, w: 0.15 },
-      { from: "z_bus", to: "z_aw", fan: true, w: 1 },
-      { from: "z_aw", to: "z_al" },
-      { from: "z_mo", to: entry }, { from: "z_mo", to: "z_pd" },
-      { from: "z_gr", to: "z_ci" }, { from: "z_ci", to: "z_mv" }, { from: "z_mv", to: "z_sq" }, { from: "z_sq", to: "z_sn" }, { from: "z_sn", to: "z_tv" }, { from: "z_tv", to: "z_er" }, { from: "z_er", to: "z_cd" }, { from: "z_cd", to: entry },
-    ];
-    const bump = (n) => Math.round(n * 1.3 + 40);
+    // don't duplicate tooling the design already has: find an existing node covering each role, by tag or equivalence group
+    const hasTag = (tag) => g.nodes.find((n) => (types[n.type] || {}).tag === tag);
+    const hasEq = (eq) => g.nodes.find((n) => (types[n.type] || {}).eq === eq);
+    const existingIdp = hasEq("idp"), existingAudit = hasTag("audit"), existingMonitor = hasTag("monitoring"), existingAlert = hasTag("alerting"),
+      existingScm = hasTag("scm"), existingCicd = hasTag("cicd"), existingBuild = hasTag("build"), existingQuality = hasTag("quality"),
+      existingScan = hasTag("security-scan"), existingRegistry = hasTag("registry"), existingDeploy = hasTag("gitops") || hasTag("deploy");
+    const maxY = Math.max(0, ...g.nodes.map((n) => n.y)), row1Y = maxY + 130, row2Y = maxY + 230;
+    const extraNodes = [], extraEdges = [], cursor = {}; const place = (row, y) => { cursor[y] = cursor[y] || 0; row.forEach(([id, type, props]) => { extraNodes.push({ id, type, x: 80 + cursor[y] * 195, y, props: Object.assign({ name: type }, props) }); cursor[y] += 1; }); };
+    // central auth: reuse an identity provider the design already has, otherwise add one
+    const idpId = existingIdp ? existingIdp.id : "z_idp";
+    if (!existingIdp) place([["z_idp", "keycloak", { name: "Central auth server", inst: idpInst }]], row1Y);
+    else { const cap = types[existingIdp.type].cap || 350; existingIdp.props.inst = Math.max(1, +existingIdp.props.inst || 1) + Math.max(1, Math.ceil(peak / cap)); }   // give it enough extra capacity for the added auth checks
+    extraEdges.push({ from: entry, to: idpId, fan: true, w: 1 });
+    // audit trail: reuse an existing append-only audit store; otherwise add the bus, writer and store
+    if (existingAudit) { existingAudit.props.inst = Math.max(1, +existingAudit.props.inst || 1) + 1; extraEdges.push({ from: entry, to: existingAudit.id, fan: true, w: 0.15 }); }
+    else { place([["z_bus", "kafka", { name: "Audit bus", workers: busWorkers }], ["z_aw", "worker", { name: "Audit writer", inst: workerInst, auto: true }], ["z_al", "auditlog", { name: "Audit log store", inst: 2 }]], row1Y); extraEdges.push({ from: entry, to: "z_bus", fan: true, w: 0.15 }, { from: "z_bus", to: "z_aw", fan: true, w: 1 }, { from: "z_aw", to: "z_al" }); }
+    // monitoring and alerting: reuse what is already there
+    const moId = existingMonitor ? existingMonitor.id : "z_mo"; if (!existingMonitor) place([["z_mo", "prometheus", {}]], row1Y); extraEdges.push({ from: moId, to: entry });
+    if (!existingAlert) { place([["z_pd", "pagerduty", {}]], row1Y); extraEdges.push({ from: moId, to: "z_pd" }); }
+    // build and deploy pipeline: only the missing steps are added, chained together and into whatever the design already has
+    const steps = [["scm", existingScm, "z_gr", "gitrepo"], ["cicd", existingCicd, "z_ci", "githubactions"], ["build", existingBuild, "z_mv", "maven"], ["quality", existingQuality, "z_sq", "sonarqube"], ["scan", existingScan, "z_sn", "snyk"], ["registry", existingRegistry, "z_er", "dockerregistry"], ["deploy", existingDeploy, "z_cd", "argocd"]];
+    const chain = steps.filter((s) => !s[1]).map((s) => s[2]);
+    if (chain.length) { place(chain.map((id) => [id, steps.find((s) => s[2] === id)[3], {}]), row2Y); for (let i = 1; i < chain.length; i++) extraEdges.push({ from: chain[i - 1], to: chain[i] }); extraEdges.push({ from: chain[chain.length - 1], to: entry }); }
+    const bump = (n) => Math.round(n * 1.2 + 25);
     let addedCost = 0; extraNodes.forEach((n) => { const d = types[n.type] || {}; const mult = n.props.inst || n.props.workers || 1; addedCost += (d.cost || 0) * mult; });
     return { name: g.name, nodes: g.nodes.concat(extraNodes), edges: g.edges.concat(extraEdges), scenario: g.scenario, slo: Object.assign({}, g.slo, { p95: bump(g.slo.p95), budget: Math.round(g.slo.budget + addedCost * 1.25 + 100) }), e2e: true };
   }
