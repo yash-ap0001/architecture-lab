@@ -351,7 +351,7 @@
     if (r.ex) { e = X.LIST.find((x) => x.name === r.ex); if (e) { const g = X.build(e, S.BY_ID); return { name: question.title, graph: g, scenario: g.scenario, slo: g.slo }; }
       const p = presets.find((x) => x.name === r.ex); if (p) { const g = p.build(); return { name: question.title, graph: g, scenario: g.scenario, slo: g.slo }; }
       throw new Error("no example named " + r.ex); }
-    const g = X.build({ name: question.title, nodes: r.nodes, edges: r.edges, scenario: r.scenario, slo: r.slo }, S.BY_ID); return { name: question.title, graph: g, scenario: r.scenario, slo: r.slo };
+    const g = X.build({ name: question.title, nodes: r.nodes, edges: r.edges, scenario: r.scenario, slo: r.slo }, S.BY_ID); return { name: question.title, graph: g, scenario: g.scenario, slo: g.slo };
   }
   return { QUESTIONS: Q, CHEAT, estimate, evaluate, reference, hasFeature, fmt, bytes };
 });

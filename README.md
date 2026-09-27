@@ -85,3 +85,7 @@ Hover any component and, under its explanation, you see when to pick it, when to
 - Findings now show "Delivery and security readiness" out of 9 (monitoring, autoscaling, safe releases, CI/CD, infrastructure as code, secrets, audit logging, security scanning, threat detection).
 
 `node tests/blueprint_check.js` checks that each platform has 7+ Java services, central auth, an event bus, audit store, data per service, tooling, 8+ patterns and a linked class design.
+
+## Every example is end to end
+
+Every example in the Sandbox (the 9 Classics and the 121 examples, but not the "fix me" puzzles and not the 10 full platform architectures, which already are end-to-end) now gets central authentication, an audit bus and append-only audit store, monitoring with alerting, and the build/deploy pipeline wired on automatically (`LabExamples.endToEnd`, applied in `build()` and in the Classics wrapper in `sandbox.js`). The goals (p95 and budget) are adjusted to account for the extra hops and cost. The "New board" starter stays a true blank canvas.

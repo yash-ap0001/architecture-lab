@@ -2,7 +2,10 @@
 (function () {
   "use strict";
   const S = window.LabSim, PRESETS = window.LabPresets.PRESETS;
-  PRESETS.forEach((p) => { p.cat = p.cat || "Classics"; });
+  PRESETS.forEach((p) => {
+    p.cat = p.cat || "Classics";
+    if (p.id !== "start" && window.LabExamples) { const orig = p.build; p.build = () => window.LabExamples.endToEnd(orig(), S.BY_ID); }
+  });
   if (window.LabExamples) window.LabExamples.LIST.forEach((e, i) => PRESETS.push({ id: "x" + i, name: e.name, cat: e.cat, notice: e.notice, build: () => Object.assign(window.LabExamples.build(e, S.BY_ID), e.blueprint ? { blueprint: e.blueprint } : {}) }));
   const $ = (s) => document.querySelector(s), $$ = (s) => [...document.querySelectorAll(s)];
   const NW = 132, NH = 66, KEY = "archlab.sandbox.v1";
@@ -115,8 +118,8 @@
   // ---------------------------------------------------------------- side panel
   function updSide() {
     $$("#side .tabs button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.tab === tab)));
-    ["parts", "inspect", "architect", "live", "scenario", "missions", "interview", "blueprint", "collapse", "board"].forEach((t) => { $("#tab-" + t).hidden = t !== tab; });
-    if (tab === "inspect") renderInspect(); else if (tab === "architect") renderArchitect(); else if (tab === "scenario") renderScenario(); else if (tab === "live") renderLive(); else if (tab === "missions") renderMissions(); else if (tab === "interview") renderInterview(); else if (tab === "blueprint") renderBlueprint(); else if (tab === "collapse") renderCollapse(); else if (tab === "board") renderBoard();
+    ["parts", "inspect", "architect", "delivery", "live", "scenario", "missions", "interview", "blueprint", "collapse", "board"].forEach((t) => { $("#tab-" + t).hidden = t !== tab; });
+    if (tab === "inspect") renderInspect(); else if (tab === "architect") renderArchitect(); else if (tab === "delivery") renderDelivery(); else if (tab === "scenario") renderScenario(); else if (tab === "live") renderLive(); else if (tab === "missions") renderMissions(); else if (tab === "interview") renderInterview(); else if (tab === "blueprint") renderBlueprint(); else if (tab === "collapse") renderCollapse(); else if (tab === "board") renderBoard();
   }
   // ---- collapsible sections: every panel heading and every component category can be folded, and the choice is remembered
   const SKEY = "archlab.sections.v1";
@@ -363,6 +366,18 @@
         <button class="architect-generate" data-act="runArchitect" ${architectBusy ? "disabled" : ""}><span>✦</span>${architectBusy ? "Designing your architecture…" : "Generate starter architecture"}</button>${progress}
       </section>
       <section class="architect-contract"><b>What you will get</b><span>Validated components</span><span>End-to-end flows</span><span>Transaction strategy</span><span>Patterns & risks</span></section>${error}${architectProposal()}`;
+  }
+  function deliveryChecks() {
+    const types = doc.nodes.map((n) => (S.BY_ID[n.type] || {}).name || n.type).join(" ").toLowerCase();
+    return [[doc.nodes.length >= 3, "Architecture has core components"], [doc.edges.length >= 2, "Main request flow is connected"], [!!doc.slo && !!doc.slo.p95, "SLO target is recorded"], [/monitor|observ/.test(types), "Observability is included"], [/pipeline|ci\/cd|github actions|jenkins|argo/.test(types), "Delivery pipeline is modelled"], [/secret|vault|key vault|kms/.test(types), "Secrets management is modelled"]];
+  }
+  function deliveryHandoff() {
+    const checks = deliveryChecks().map(([ok, label]) => `- [${ok ? "x" : " "}] ${label}`).join("\n");
+    return `# Implementation handoff: ${doc.name || "Untitled architecture"}\n\n## Frozen architecture\n\n${buildBrief()}\n\n## Delivery gates\n\n${checks}\n\n## Required execution order\n\n1. Generate the application code, tests, Docker files, infrastructure-as-code, and CI pipeline from this design.\n2. Run lint, unit tests, integration tests, dependency/security scanning, and build the deployable artifacts.\n3. Deploy to staging and run smoke tests.\n4. Present the staging URL, pipeline logs, costs, and rollback plan for approval.\n5. Deploy to production only after explicit approval.\n`;
+  }
+  function renderDelivery() {
+    const el = $("#tab-delivery"), frozen = doc.delivery && doc.delivery.frozenAt, checks = deliveryChecks(), ready = checks.filter((x) => x[0]).length;
+    el.innerHTML = `<div class="delivery-hero"><span class="architect-kicker">DELIVERY CONTROL ROOM</span><h2>From approved design to running product.</h2><p>Freeze the architecture, create an implementation handoff, then let the build agent create code and the pipeline verify it. Deployment remains an explicit final approval.</p></div><section class="delivery-state"><span class="delivery-dot ${frozen ? "done" : ""}"></span><div><b>${frozen ? "Architecture frozen for implementation" : "Architecture is still editable"}</b><p>${frozen ? "The handoff uses this exact component map and flow." : "Review the canvas, traffic tests, risks, and SLO before freezing."}</p></div></section><h3>Readiness ${ready} / ${checks.length}</h3><ul class="delivery-checks">${checks.map(([ok, label]) => `<li class="${ok ? "ok" : ""}"><b>${ok ? "✓" : "○"}</b>${esc(label)}</li>`).join("")}</ul><h3>Delivery path</h3><ol class="delivery-path"><li><b>Freeze design</b><span>Locks a local snapshot for the build agent.</span></li><li><b>Generate code</b><span>Agent creates frontend, services, tests, infrastructure and documentation from the handoff.</span></li><li><b>Run pipeline</b><span>Lint, unit tests, integration tests, security scan and image build must pass.</span></li><li><b>Deploy</b><span>Deploy to staging first; production needs your final approval and configured cloud account.</span></li></ol><div class="btnrow">${frozen ? `<button class="primary-sm" data-act="downloadHandoff">Download implementation handoff</button><button data-act="unfreezeDelivery">Edit architecture</button>` : `<button class="primary-sm" data-act="freezeDelivery">Freeze for implementation</button>`}</div>${frozen ? `<p class="delivery-note">Next: give the handoff to the build agent with a local folder or Git repository. It will create code first, run the pipeline, and show you the staging result before any deployment.</p>` : ""}`;
   }
   async function aiArchitect() {
     const description = `${architectDraft}\n\nPlanning horizon: ${ARCHITECT_SCALES[architectScale]}`;
@@ -819,6 +834,9 @@
     else if (act === "runArchitect") { aiArchitect(); }
     else if (act === "editArchitect") { architectResult = null; renderArchitect(); $("#architectPrompt").focus(); }
     else if (act === "applyArchitect" && architectResult) { useDocument(architectResult.document); architectResult = null; tab = "live"; updSide(); say("AI architecture loaded. Run traffic, then ask the reviewer for improvements."); }
+    else if (act === "freezeDelivery") { doc.delivery = { frozenAt: new Date().toISOString() }; persist(); snapshot(); renderDelivery(); say("Architecture frozen locally. Create the implementation handoff when ready."); }
+    else if (act === "unfreezeDelivery") { delete doc.delivery; persist(); snapshot(); renderDelivery(); say("Architecture is editable again."); }
+    else if (act === "downloadHandoff") { download(deliveryHandoff(), (doc.name || "architecture").replace(/[^a-z0-9]+/gi, "-").toLowerCase() + "-implementation-handoff.md", "text/markdown"); say("Implementation handoff downloaded."); }
     else if (act === "saveMemory") { memoryApi("/api/architecture-lab/save", { document: doc, extra: saveExtra() }).then((p) => say(`Saved “${p.name}” to YashAI memory.`)).catch((err) => say(err.message)); }
     else if (act === "openMemory") { openMemory(); }
     else if (act === "brief") download(buildBrief(), (doc.name || "design").replace(/[^a-z0-9]+/gi, "-").toLowerCase() + "-design-brief.md", "text/markdown");
