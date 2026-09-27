@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Architecture Lab Sandbox</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="A free canvas for system design: draw any architecture, run live traffic, inject failures, and see what breaks.">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="sandbox.css">
+<script src="theme.js"></script>
+</head>
+<body>
+<header id="bar">
+  <a class="home" href="./" title="Back to the levels">← Levels</a>
+  <div class="menu">
+    <button id="mFile" aria-haspopup="true">File ▾</button>
+    <div id="fileMenu" class="dropdown" hidden>
+      <button data-act="new">New board</button><button data-act="resetSimple">Reset to simple starter</button><button data-act="clearCanvas">Clear all components…</button><hr>
+      <button data-act="open">Open file…</button><button data-act="save">Save to file</button><button data-act="saveMemory">Save to YashAI memory</button><button data-act="openMemory">Open YashAI project…</button><hr>
+      <button data-act="brief">Export design brief (.md)</button><button data-act="prompt">Copy coding-agent prompt</button><button data-act="share">Copy share link</button><hr>
+      <button data-act="help">Help &amp; shortcuts</button>
+    </div>
+    <button id="mPreset" aria-haspopup="true">Examples ▾</button>
+    <div id="presetMenu" class="dropdown" hidden></div>
+  </div>
+  <input id="title" type="text" value="Untitled design" aria-label="Design name" maxlength="60">
+  <div class="tools" role="toolbar" aria-label="Tools">
+    <button data-tool="select" title="Select and move (V)" aria-pressed="true">▢ Select</button>
+    <button data-tool="hand" title="Pan the board (H or hold Space)" aria-pressed="false">✋ Pan</button>
+    <button data-tool="connect" title="Connect two boxes (C)" aria-pressed="false">↔ Connect</button>
+    <button id="undo" title="Undo (Ctrl+Z)">↶</button><button id="redo" title="Redo (Ctrl+Y)">↷</button><button data-act="deleteSelected" title="Select a component or wire, then delete it">Delete</button><button data-act="resetSimple" title="Reset the canvas to a simple starter">Reset</button>
+    <button id="zoomOut" title="Zoom out (−)">−</button><button id="zoomReset" title="Reset zoom">100%</button><button id="zoomIn" title="Zoom in (+)">+</button><button id="fit" title="Fit everything">Fit</button>
+  </div>
+</header>
+<div id="main">
+  <div id="stage"><button id="sideShow" hidden title="Show the panel">◂ Panel</button><svg id="board" role="application" aria-label="Design board"></svg><div id="hint" class="hint"></div><div id="banner" class="banner" hidden></div></div>
+  <aside id="side">
+    <div id="sideGrip" title="Drag to resize"></div>
+    <div class="sidebar-tools"><span class="muted">Panel</span><span><button id="sideWide" title="Make the panel wider or narrower">⤢ Expand</button><button id="sideHide" title="Hide the panel (more room for the board)">Hide ▸</button></span></div>
+    <nav class="tabs" role="tablist">
+      <button data-tab="parts" aria-pressed="true">Components</button><button data-tab="inspect" aria-pressed="false">Selected</button><button data-tab="architect" aria-pressed="false">AI Architect</button><button data-tab="live" aria-pressed="false">Live</button><button data-tab="scenario" aria-pressed="false">Traffic</button><button data-tab="missions" aria-pressed="false">Missions</button><button data-tab="interview" aria-pressed="false">Interview</button><button data-tab="blueprint" aria-pressed="false">Blueprint</button><button data-tab="collapse" aria-pressed="false">Collapse</button><button data-tab="board" aria-pressed="false">Board</button>
+    </nav>
+    <section id="tab-parts"></section><section id="tab-inspect" hidden></section><section id="tab-architect" hidden></section><section id="tab-live" hidden></section><section id="tab-scenario" hidden></section><section id="tab-missions" hidden></section><section id="tab-interview" hidden></section><section id="tab-blueprint" hidden></section><section id="tab-collapse" hidden></section><section id="tab-board" hidden></section>
+  </aside>
+</div>
+<footer id="sim">
+  <div class="grp"><button id="play" class="play">▶ Start</button><button id="stop" title="Stop and clear results">■</button></div>
+  <div class="grp"><span class="lbl">Speed</span><span class="seg" id="speed"><button data-v="0.5">0.5×</button><button data-v="1" aria-pressed="true">1×</button><button data-v="2.5">2.5×</button><button data-v="5">5×</button></span></div>
+  <div class="grp"><span class="lbl">Traffic</span><input id="mult" type="range" min="0" max="5" step="0.25" value="1" aria-label="Traffic multiplier"><output id="multOut">1×</output></div>
+  <div class="grp chaos"><span class="lbl">Break it</span>
+    <button data-chaos="dbDown" title="Database primary fails">🗄️ DB down</button><button data-chaos="cacheFlush" title="Cache is flushed">⚡ Cache flush</button><button data-chaos="lbDown" title="Load balancer fails (unless HA)">⚖️ LB down</button>
+    <button data-chaos="azOut" title="A zone goes dark: half the capacity">🌪 Zone out</button><button data-chaos="partition" title="The network between regions is cut">✂️ Partition</button><span id="regionChaos"></span><button data-chaos="burst" title="Traffic jumps 60% for a moment">🔁 Burst</button><button data-chaos="slowDb" title="Database 4× slower">🐌 Slow DB</button></div>
+  <div class="kpis" id="kpis" aria-live="off"></div>
+</footer>
+<input id="file" type="file" accept="application/json,.json" hidden>
+<dialog id="memory"><h2>YashAI Architecture Library</h2><p class="muted">Saved on this PC in shared YashAI memory.</p><div id="memoryList"></div><form method="dialog"><button>Close</button></form></dialog>
+<dialog id="help"><h2>Sandbox help</h2>
+  <ul><li><b>Add:</b> click a component, or drag it onto the board.</li><li><b>Connect:</b> drag from the dot on a box's right edge to another box, or use ↔ Connect and click two boxes.</li>
+  <li><b>Move:</b> drag a box. <b>Pan:</b> drag empty space, or hold Space. <b>Zoom:</b> mouse wheel.</li><li><b>Edit:</b> click a box, then the <i>Selected</i> tab. <b>Delete:</b> Delete key. <b>Undo:</b> Ctrl+Z.</li>
+  <li><b>Run:</b> ▶ Start. Change traffic, speed and failures while it runs.</li><li>The model is a teaching model; its numbers are not benchmarks. Edit any number in <i>Selected</i>, and mark numbers you measured in the design brief.</li></ul>
+  <form method="dialog"><button>Close</button></form></dialog>
+<script src="sim.js"></script>
+<script src="catalog_more.js"></script>
+<script src="catalog_more2.js"></script>
+<script src="catalog_docs.js"></script>
+<script src="catalog_alts.js"></script>
+<script src="presets.js"></script>
+<script src="platforms.js"></script>
+<script src="platform_sizes.js"></script>
+<script src="examples_more.js"></script>
+<script src="missions.js"></script>
+<script src="interview.js"></script>
+<script src="lld_a.js"></script>
+<script src="lld_b.js"></script>
+<script src="lld_c.js"></script>
+<script src="lld_d.js"></script>
+<script src="lld_e.js"></script>
+<script src="lld.js"></script>
+<script src="collapse.js"></script>
+<script src="board.js"></script>
+<script src="sandbox.js"></script>
+</body>
+</html>

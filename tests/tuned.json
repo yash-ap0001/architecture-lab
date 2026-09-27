@@ -1,0 +1,272 @@
+{
+ "1": {
+  "cost": 380,
+  "cfg": {
+   "cdn": false,
+   "limiter": 0,
+   "lb": "none",
+   "app": {
+    "n": 1,
+    "auto": false
+   },
+   "cache": {
+    "tier": "none",
+    "nodes": 2,
+    "coalesce": false
+   },
+   "queue": {
+    "on": false,
+    "workers": 24
+   },
+   "db": {
+    "shards": 1,
+    "replicas": 0,
+    "ha": false,
+    "salting": false
+   }
+  }
+ },
+ "2": {
+  "cost": 993,
+  "cfg": {
+   "cdn": false,
+   "limiter": 0,
+   "lb": "single",
+   "app": {
+    "n": 3,
+    "auto": true
+   },
+   "cache": {
+    "tier": "s",
+    "nodes": 1,
+    "coalesce": false
+   },
+   "queue": {
+    "on": false,
+    "workers": 8
+   },
+   "db": {
+    "shards": 1,
+    "replicas": 0,
+    "ha": false,
+    "salting": false
+   }
+  }
+ },
+ "3": {
+  "cost": 3750,
+  "cfg": {
+   "cdn": false,
+   "limiter": 0,
+   "lb": "single",
+   "app": {
+    "n": 40,
+    "auto": false
+   },
+   "cache": {
+    "tier": "l",
+    "nodes": 1,
+    "coalesce": false
+   },
+   "queue": {
+    "on": false,
+    "workers": 2
+   },
+   "db": {
+    "shards": 1,
+    "replicas": 0,
+    "ha": false,
+    "salting": false
+   }
+  }
+ },
+ "4": {
+  "cost": 3020,
+  "cfg": {
+   "cdn": true,
+   "limiter": 0,
+   "lb": "single",
+   "app": {
+    "n": 30,
+    "auto": false
+   },
+   "cache": {
+    "tier": "m",
+    "nodes": 1,
+    "coalesce": false
+   },
+   "queue": {
+    "on": false,
+    "workers": 8
+   },
+   "db": {
+    "shards": 1,
+    "replicas": 0,
+    "ha": false,
+    "salting": false
+   }
+  }
+ },
+ "5": {
+  "cost": 5970,
+  "cfg": {
+   "cdn": false,
+   "limiter": 0,
+   "lb": "single",
+   "app": {
+    "n": 30,
+    "auto": false
+   },
+   "cache": {
+    "tier": "none",
+    "nodes": 1,
+    "coalesce": false
+   },
+   "queue": {
+    "on": true,
+    "workers": 24
+   },
+   "db": {
+    "shards": 8,
+    "replicas": 0,
+    "ha": false,
+    "salting": false
+   }
+  }
+ },
+ "6": {
+  "cost": 1520,
+  "cfg": {
+   "cdn": false,
+   "limiter": 0,
+   "lb": "single",
+   "app": {
+    "n": 10,
+    "auto": false
+   },
+   "cache": {
+    "tier": "m",
+    "nodes": 1,
+    "coalesce": false
+   },
+   "queue": {
+    "on": true,
+    "workers": 2
+   },
+   "db": {
+    "shards": 1,
+    "replicas": 0,
+    "ha": true,
+    "salting": false
+   }
+  }
+ },
+ "7": {
+  "cost": 5150,
+  "cfg": {
+   "cdn": false,
+   "limiter": 0,
+   "lb": "single",
+   "app": {
+    "n": 50,
+    "auto": false
+   },
+   "cache": {
+    "tier": "l",
+    "nodes": 1,
+    "coalesce": true
+   },
+   "queue": {
+    "on": false,
+    "workers": 4
+   },
+   "db": {
+    "shards": 1,
+    "replicas": 3,
+    "ha": false,
+    "salting": false
+   }
+  }
+ },
+ "8": {
+  "cost": 2130,
+  "cfg": {
+   "cdn": false,
+   "limiter": 0,
+   "lb": "single",
+   "app": {
+    "n": 15,
+    "auto": false
+   },
+   "cache": {
+    "tier": "none",
+    "nodes": 3,
+    "coalesce": false
+   },
+   "queue": {
+    "on": false,
+    "workers": 16
+   },
+   "db": {
+    "shards": 3,
+    "replicas": 0,
+    "ha": false,
+    "salting": true
+   }
+  }
+ },
+ "9": {
+  "cost": 7203,
+  "cfg": {
+   "cdn": true,
+   "limiter": 48000,
+   "lb": "ha",
+   "app": {
+    "n": 40,
+    "auto": true
+   },
+   "cache": {
+    "tier": "s",
+    "nodes": 1,
+    "coalesce": true
+   },
+   "queue": {
+    "on": false,
+    "workers": 8
+   },
+   "db": {
+    "shards": 4,
+    "replicas": 0,
+    "ha": true,
+    "salting": true
+   }
+  }
+ },
+ "10": {
+  "cost": 7720,
+  "cfg": {
+   "cdn": false,
+   "limiter": 0,
+   "lb": "ha",
+   "app": {
+    "n": 60,
+    "auto": false
+   },
+   "cache": {
+    "tier": "none",
+    "nodes": 4,
+    "coalesce": true
+   },
+   "queue": {
+    "on": true,
+    "workers": 2
+   },
+   "db": {
+    "shards": 3,
+    "replicas": 3,
+    "ha": false,
+    "salting": true
+   }
+  }
+ }
+}

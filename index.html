@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Architecture Lab</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="Design a system, run real-looking traffic through it, and see what breaks. Ten levels from a blog to a URL shortener interview.">
+<meta name="theme-color" content="#1b1233">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Arch Lab">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="stylesheet" href="style.css">
+<script src="theme.js"></script>
+</head>
+<body>
+<header class="top">
+  <button id="back" class="icon" aria-label="Back to levels" hidden>&larr;</button>
+  <h1 id="title">Architecture Lab</h1>
+  <span id="totalStars" class="stars-total" aria-label="Total stars"></span>
+</header>
+<main id="app" aria-live="polite"></main>
+<footer class="foot">Learning model. The numbers are round teaching values, not benchmarks. Do not size a real system from them.</footer>
+<script src="engine.js"></script>
+<script src="levels.js"></script>
+<script src="graph.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
