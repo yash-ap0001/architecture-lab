@@ -14,7 +14,10 @@
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icon-180.png">
 <link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style-tactical.css">
+<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
 <script src="theme.js"></script>
+<script>if(new URLSearchParams(location.search).get("embed")==="control-room")document.documentElement.classList.add("control-room-embed");</script>
 </head>
 <body>
 <header class="top">
@@ -24,9 +27,9 @@
 </header>
 <main id="app" aria-live="polite"></main>
 <footer class="foot">Learning model. The numbers are round teaching values, not benchmarks. Do not size a real system from them.</footer>
-<script src="engine.js"></script>
-<script src="levels.js"></script>
-<script src="graph.js"></script>
-<script src="app.js"></script>
+<script src="engine.js?v=cr1"></script>
+<script src="levels.js?v=cr1"></script>
+<script src="graph.js?v=cr1"></script>
+<script src="app.js?v=20261001-training-path"></script>
 </body>
 </html>

@@ -12,6 +12,7 @@
   const starsOf = (id) => (progress.levels[id] && progress.levels[id].stars) || 0;
   const unlocked = (i) => i === 0 || starsOf(LEVELS[i - 1].id) >= 1;
   const totalStars = () => LEVELS.reduce((s, l) => s + starsOf(l.id), 0);
+  const nextLesson = () => LEVELS.find((l, i) => unlocked(i) && starsOf(l.id) < 3) || LEVELS[0];
 
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const money = (n) => "$" + Math.round(n).toLocaleString("en-US");
@@ -31,26 +32,32 @@
   }
   function saved(id) { const p = progress.levels[id]; return p && p.cfg ? p.cfg : null; }
 
-  // ---------------------------------------------------------------- home
+  // ---------------------------------------------------------------- training home
   function home() {
-    $title.textContent = "Architecture Lab"; $back.hidden = true;
+    const next = nextLesson();
+    $title.textContent = "System Design Training"; $back.hidden = true;
     $total.textContent = totalStars() + " / " + LEVELS.length * 3 + " ★";
     $app.innerHTML = `
-      <section class="card">
-        <h2>Design it. Load it. See what breaks.</h2>
-        <p class="muted">Each level gives you a story, a traffic pattern and a goal. Build the architecture, run the traffic, read the post-mortem, then improve it.
-        One star for meeting the goal, two for surviving the incident, three for staying under budget.</p>
+      <section class="training-hero">
+        <span class="cr-kicker">Practice path</span>
+        <h2>Learn by designing systems that have to survive.</h2>
+        <p class="muted">Each lesson gives you a product story, traffic, reliability goals, and a budget. You make the design decisions, run the simulation, then improve the weak point.</p>
       </section>
-      <section class="card"><h2>Sandbox: a free canvas</h2><p class="muted">Draw any architecture from 56 components, run live traffic, change the load and break things while it runs. Best on a desktop.</p><a class="primary" style="display:block;text-align:center;text-decoration:none" href="sandbox.html">Open Sandbox</a></section>
-      <section class="card"><h2>Studio: your own product</h2><p class="muted">Done with the levels, or already know the ideas? Describe a real product, calibrate with your own numbers, simulate, and export a design brief.</p><button class="primary" data-mode="studio">Open Studio</button></section>
-      <h2 style="margin:8px 2px">Play the levels</h2>
-      <div class="grid">${LEVELS.map((l, i) => {
-        const ok = unlocked(i), s = starsOf(l.id);
-        return `<button class="lvl" data-level="${l.id}" ${ok ? "" : "disabled"}>
-          <span class="n">Level ${l.id}${ok ? "" : " · locked"}</span><span class="t">${esc(l.title)}</span>
-          <span class="muted">${esc(l.learn.split(".")[0])}.</span><span class="s" aria-label="${s} of 3 stars">${starText(s)}</span></button>`;
-      }).join("")}</div>
-      <p class="muted" style="margin-top:14px">Progress is saved on this device only.</p>`;
+      <section class="training-flow" aria-label="How learning works">
+        <article><span>01</span><h3>Read the brief</h3><p>Understand users, peak traffic, SLOs, and the budget.</p></article>
+        <article><span>02</span><h3>Design it</h3><p>Add and connect the components the lesson unlocks.</p></article>
+        <article><span>03</span><h3>Run traffic</h3><p>Watch latency, errors, cost, and any incident play out.</p></article>
+        <article><span>04</span><h3>Improve it</h3><p>Use the post-mortem, earn a star, and unlock the next scenario.</p></article>
+      </section>
+      <section class="card training-levels">
+        <div class="training-levels-head"><div><span class="cr-badge">Guided practice</span><h2>Choose your next challenge</h2><p class="muted training-next-copy">Start with the recommended lesson, or return to any unlocked lesson to improve your score.</p></div><div class="training-next-action"><span class="muted">${totalStars()} stars earned</span><button class="primary training-start" data-next-lesson="1">Start Level ${next.id}: ${esc(next.title)}</button></div></div>
+        <div class="grid">${LEVELS.map((l, i) => {
+          const ok = unlocked(i), s = starsOf(l.id);
+          return `<button class="lvl" data-level="${l.id}" ${ok ? "" : "disabled"}>
+            <span class="n">Level ${l.id}${ok ? "" : " · locked"}</span><span class="t">${esc(l.title)}</span>
+            <span class="muted">${esc(l.learn.split(".")[0])}.</span><span class="s" aria-label="${s} of 3 stars">${starText(s)}</span></button>`;
+        }).join("")}</div>
+      </section>`;
   }
 
   // ---------------------------------------------------------------- level screen
@@ -636,6 +643,7 @@
 
   document.addEventListener("click", (e) => {
     const t = e.target.closest("button"); if (!t) return;
+    if (t.dataset.nextLesson) return go(nextLesson().id);
     if (t.dataset.level) return go(+t.dataset.level);
     if (t.id === "back") { stopPlay(); if (mode === "studio") { mode = "studio-home"; level = null; return render(); } if (mode === "studio-home") { mode = "game"; return render(); } level = null; return render(); }
     if (t.dataset.mode === "studio") { mode = "studio-home"; return render(); }
@@ -710,6 +718,13 @@
     const m = /^#s=(.+)$/.exec(location.hash);
     if (m) { const d = JSON.parse(atob(m[1])); if (LEVELS.some((l) => l.id === d.l)) { go(d.l); cfg = E.normalize(d.c); ui = "canvas"; graph = G.fromCfg(cfg, peakOf()); render(); } }
   } catch (e) { /* ignore a broken link */ }
-  if (!level && new URLSearchParams(location.search).get("studio") === "1") mode = "studio-home";
+  if (!level) {
+    const qs = new URLSearchParams(location.search);
+    const lvlParam = qs.get("level");
+    if (lvlParam) {
+      const wantId = lvlParam === "next" ? nextLesson().id : Number(lvlParam);
+      if (LEVELS.some((l) => l.id === wantId)) go(wantId);
+    } else if (qs.get("studio") === "1") mode = "studio-home";
+  }
   if (!level) render();
 })();

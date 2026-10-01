@@ -6,12 +6,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="description" content="A free canvas for system design: draw any architecture, run live traffic, inject failures, and see what breaks.">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
-<link rel="stylesheet" href="sandbox.css">
+<link rel="stylesheet" href="sandbox.css?v=20261001i-more-pill">
+<link rel="stylesheet" href="theme-tactical.css">
+<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
 <script src="theme.js"></script>
+<script>if (new URLSearchParams(location.search).get("embed") === "control-room") document.documentElement.classList.add("control-room-embed");</script>
 </head>
 <body>
 <header id="bar">
-  <a class="home" href="./" title="Back to the levels">← Levels</a>
+  <button class="home" type="button" data-act="resetSimple" title="Start a new architecture">↺ New design</button>
   <div class="menu">
     <button id="mFile" aria-haspopup="true">File ▾</button>
     <div id="fileMenu" class="dropdown" hidden>
@@ -31,17 +34,41 @@
     <button id="undo" title="Undo (Ctrl+Z)">↶</button><button id="redo" title="Redo (Ctrl+Y)">↷</button><button data-act="deleteSelected" title="Select a component or wire, then delete it">Delete</button><button data-act="resetSimple" title="Reset the canvas to a simple starter">Reset</button>
     <button id="zoomOut" title="Zoom out (−)">−</button><button id="zoomReset" title="Reset zoom">100%</button><button id="zoomIn" title="Zoom in (+)">+</button><button id="fit" title="Fit everything">Fit</button>
   </div>
+  <div id="levelControls" role="toolbar" aria-label="Architecture levels" hidden>
+    <span>Levels</span><button data-level-toggle="1" title="Level 1: system canvas">L1</button><button data-level-toggle="2" title="Level 2: internal design of the selected component" disabled>L2</button><button data-level-toggle="3" title="Level 3: implementation detail" disabled>L3</button><button data-level-reset title="Back to Level 1">Reset</button>
+  </div>
 </header>
 <div id="main">
-  <div id="stage"><button id="sideShow" hidden title="Show the panel">◂ Panel</button><svg id="board" role="application" aria-label="Design board"></svg><div id="hint" class="hint"></div><div id="banner" class="banner" hidden></div></div>
+  <aside id="partsPanel" hidden>
+    <div id="partsGrip" title="Drag to resize"></div>
+    <div class="ai-deck-head"><span class="architect-kicker">COMPONENTS</span><b>Browse &amp; add</b><p>Always here for ideas — drag any piece onto the canvas.</p><span class="ai-deck-head-btns"><button id="partsWide" title="Make the panel wider or narrower">⤢ Expand</button><button id="partsHide" title="Collapse this panel (more room for the canvas)">Collapse</button></span></div>
+  </aside>
+  <aside id="aiDeck" hidden>
+    <div id="deckGrip" title="Drag to resize"></div>
+    <div class="ai-deck-head"><span class="level-badge">LEVEL 1</span><span class="architect-kicker">SYSTEM CANVAS</span><b>AI design input</b><p>Choose the system before it is drawn.</p><span class="ai-deck-head-btns"><button id="deckWide" title="Make the panel wider or narrower">⤢ Expand</button><button id="deckHide" title="Collapse this panel (more room for the canvas)">Collapse</button></span></div>
+  </aside>
+  <div id="levelStack">
+  <div id="stage"><button id="sideShow" hidden title="Show the panel">◂ Panel</button><button id="deckShow" hidden title="Show the AI design panel">AI Panel ▸</button><button id="partsShow" hidden title="Show the component panel">Components</button><svg id="board" role="application" aria-label="Design board"></svg><div id="hint" class="hint"></div><div id="banner" class="banner" hidden></div>
+  </div>
   <aside id="side">
     <div id="sideGrip" title="Drag to resize"></div>
     <div class="sidebar-tools"><span class="muted">Panel</span><span><button id="sideWide" title="Make the panel wider or narrower">⤢ Expand</button><button id="sideHide" title="Hide the panel (more room for the board)">Hide ▸</button></span></div>
     <nav class="tabs" role="tablist">
-      <button data-tab="parts" aria-pressed="true">Components</button><button data-tab="inspect" aria-pressed="false">Selected</button><button data-tab="architect" aria-pressed="false">AI Architect</button><button data-tab="delivery" aria-pressed="false">Build & Deploy</button><button data-tab="live" aria-pressed="false">Live</button><button data-tab="scenario" aria-pressed="false">Traffic</button><button data-tab="missions" aria-pressed="false">Missions</button><button data-tab="interview" aria-pressed="false">Interview</button><button data-tab="blueprint" aria-pressed="false">Blueprint</button><button data-tab="collapse" aria-pressed="false">Collapse</button><button data-tab="board" aria-pressed="false">Board</button>
+      <button data-tab="parts" aria-pressed="true" title="Components">Parts</button><button data-tab="inspect" aria-pressed="false" title="Deep design">Design</button><button data-tab="architect" aria-pressed="false" title="AI Architect">AI</button><button data-tab="delivery" aria-pressed="false" title="Build &amp; Deploy">Deploy</button><button data-tab="live" aria-pressed="false" title="Live">Live</button><button data-tab="scenario" aria-pressed="false" title="Traffic">Traffic</button>
+      <div class="menu tabmore">
+        <button id="mMoreTabs" aria-haspopup="true" aria-pressed="false">More ▾</button>
+        <div id="moreTabsMenu" class="dropdown" hidden>
+          <button data-tab="missions" aria-pressed="false">Missions</button><button data-tab="interview" aria-pressed="false">Interview</button><button data-tab="blueprint" aria-pressed="false">Blueprint</button><button data-tab="collapse" aria-pressed="false">Collapse</button><button data-tab="board" aria-pressed="false">Board</button>
+        </div>
+      </div>
     </nav>
     <section id="tab-parts"></section><section id="tab-inspect" hidden></section><section id="tab-architect" hidden></section><section id="tab-delivery" hidden></section><section id="tab-live" hidden></section><section id="tab-scenario" hidden></section><section id="tab-missions" hidden></section><section id="tab-interview" hidden></section><section id="tab-blueprint" hidden></section><section id="tab-collapse" hidden></section><section id="tab-board" hidden></section>
   </aside>
+  <aside id="thirdSide" hidden aria-label="Level 3 implementation detail">
+    <div class="sidebar-tools"><span class="level-badge">LEVEL 3</span><span class="muted">Implementation</span></div>
+    <section id="thirdContent"></section>
+  </aside>
+  </div>
 </div>
 <footer id="sim">
   <div class="grp"><button id="play" class="play">▶ Start</button><button id="stop" title="Stop and clear results">■</button></div>
@@ -78,6 +105,6 @@
 <script src="lld.js"></script>
 <script src="collapse.js"></script>
 <script src="board.js"></script>
-<script src="sandbox.js"></script>
+<script src="sandbox.js?v=20261001i-more-pill"></script>
 </body>
 </html>

@@ -1,0 +1,108 @@
+/* Tactical HUD skin for the Control Module (home page) — matches theme-tactical.css.
+   Applies only for Dark (explicit) or Auto-with-system-dark, so Light mode is real light. */
+:root[data-theme="dark"] {
+  --bg: #0b0d0a; --card: #14170f; --ink: #eef1e6; --muted: #8d9482; --line: #2c3324;
+  --accent: #f2a900; --accent-ink: #14170f; --accent-soft: #2a2410;
+  --ok: #7ee081; --ok-bg: #16321a; --warn: #ffcf5c; --warn-bg: #3a2c08;
+  --bad: #ff5c4d; --bad-bg: #3a1512; --chart-a: #f2a900; --chart-b: #ff5c4d; --shadow: none;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0b0d0a; --card: #14170f; --ink: #eef1e6; --muted: #8d9482; --line: #2c3324;
+    --accent: #f2a900; --accent-ink: #14170f; --accent-soft: #2a2410;
+    --ok: #7ee081; --ok-bg: #16321a; --warn: #ffcf5c; --warn-bg: #3a2c08;
+    --bad: #ff5c4d; --bad-bg: #3a1512; --chart-a: #f2a900; --chart-b: #ff5c4d; --shadow: none;
+    color-scheme: dark;
+  }
+}
+
+html, body {
+  font-family: "Rajdhani", "Segoe UI", system-ui, sans-serif;
+  background:
+    linear-gradient(rgba(242,169,0,.03) 1px, transparent 1px) 0 0 / 100% 28px,
+    linear-gradient(90deg, rgba(242,169,0,.03) 1px, transparent 1px) 0 0 / 28px 100%,
+    var(--bg);
+}
+
+.top {
+  background: #070805;
+  border-bottom: 2px solid var(--accent);
+  box-shadow: 0 2px 18px rgba(242,169,0,.15);
+}
+/* Embedded inside the Control Room's own header — don't duplicate title/stars/theme toggle. */
+html.embedded .top #title, html.embedded .top .stars-total { display: none; }
+html.embedded .top { padding: 6px 12px; min-height: 0; }
+html.embedded .theme-btn { margin-left: auto; }
+html.embedded main#app { padding-top: 0; max-width: none; padding-left: 24px; padding-right: 24px; }
+html.embedded .layout { grid-template-columns: 1fr; }
+@media (min-width: 1100px) { html.embedded .layout { grid-template-columns: 1.3fr .9fr; } }
+html.embedded .cr-modules { grid-template-columns: 1fr; }
+@media (min-width: 860px) { html.embedded .cr-modules { grid-template-columns: repeat(3, 1fr); } }
+@media (min-width: 1500px) { html.embedded main#app { padding-left: 48px; padding-right: 48px; } }
+.top h1 { text-transform: uppercase; letter-spacing: .1em; font-size: 16px; }
+.stars-total { color: var(--accent); text-shadow: 0 0 8px rgba(242,169,0,.5); font-weight: 700; }
+button.icon { border-radius: 2px; background: rgba(238,241,230,.08); }
+
+.card, .lvl, .metric, .tier, .inspector {
+  border-radius: 2px !important;
+  border: 1px solid var(--line);
+}
+.card h2 { text-transform: uppercase; letter-spacing: .06em; font-size: 15px; }
+.card h2::before { content: "▸ "; color: var(--accent); }
+
+.lvl { position: relative; overflow: hidden; }
+.lvl .n { text-transform: uppercase; letter-spacing: .08em; font-weight: 700; color: var(--accent); }
+.lvl .t { text-transform: uppercase; letter-spacing: .02em; }
+.lvl:not([disabled])::before {
+  content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--accent);
+}
+.lvl[disabled] { opacity: .35; }
+.lvl .s { color: var(--accent); text-shadow: 0 0 6px rgba(242,169,0,.4); }
+
+.chip { border-radius: 2px !important; text-transform: uppercase; font-size: 11px; letter-spacing: .05em; font-weight: 700; }
+
+.primary {
+  border-radius: 2px !important;
+  background: var(--accent); color: var(--accent-ink); font-weight: 800;
+  text-transform: uppercase; letter-spacing: .08em;
+  clip-path: polygon(12px 0, 100% 0, 100% 100%, 0 100%, 0 12px);
+  box-shadow: 0 0 18px rgba(242,169,0,.4);
+}
+.ghost { border-radius: 2px !important; border-color: var(--line); text-transform: uppercase; letter-spacing: .06em; font-size: 13px; }
+
+.seg, .step, .tabs button { border-radius: 2px !important; }
+.seg button[aria-pressed="true"], .tabs button[aria-pressed="true"] {
+  background: var(--accent); color: var(--accent-ink); box-shadow: 0 0 10px rgba(242,169,0,.4);
+}
+
+.metric .v { font-family: "Rajdhani", monospace; }
+.score .big { font-family: "Rajdhani", monospace; text-shadow: 0 0 14px rgba(242,169,0,.45); }
+.result-stars { color: var(--accent); text-shadow: 0 0 10px rgba(242,169,0,.5); }
+
+/* Control Room */
+.control-room-hero { padding: 4px 2px 18px; border-bottom: 1px solid var(--line); margin-bottom: 16px; }
+.cr-kicker { display: block; color: var(--accent); font-size: 11px; font-weight: 800; letter-spacing: .18em; text-transform: uppercase; text-shadow: 0 0 8px rgba(242,169,0,.4); }
+.control-room-hero h2 { margin: 8px 0 8px; font-size: 24px; letter-spacing: -.01em; text-transform: none; }
+.control-room-hero h2::before { content: none; }
+.cr-modules { display: grid; grid-template-columns: 1fr; gap: 14px; }
+@media (min-width: 860px) { .cr-modules { grid-template-columns: repeat(3, 1fr); align-items: start; } }
+.cr-module { position: relative; padding-top: 20px; }
+.cr-badge {
+  display: inline-block; margin-bottom: 10px; padding: 3px 8px;
+  border: 1px solid var(--accent); color: var(--accent);
+  font-size: 10px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase;
+}
+
+/* free canvas (Studio) — drop the hand-drawn sketch look for a sharp tactical line */
+#cv .box { filter: none; stroke-width: 1.6; }
+#cv .node.sel .box { filter: drop-shadow(0 0 6px rgba(242,169,0,.6)); }
+.pal { border-radius: 2px !important; font-family: "Rajdhani", sans-serif; text-transform: uppercase; font-size: 10.5px; letter-spacing: .05em; }
+.cv-wrap { border-radius: 2px !important; background: radial-gradient(circle, var(--line) 1px, transparent 1px) 0 0 / 22px 22px, var(--bg); }
+
+.fld input, .fld select, .calrow input, .theme-btn { border-radius: 2px !important; }
+
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-track { background: #070805; }
+::-webkit-scrollbar-thumb { background: var(--line); border: 1px solid #070805; }
+::-webkit-scrollbar-thumb:hover { background: var(--accent); }

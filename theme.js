@@ -3,6 +3,16 @@
   "use strict";
   var K = "archlab.theme", mode = "auto", root = document.documentElement;
   try { mode = localStorage.getItem(K) || "auto"; } catch (e) { /* ignore */ }
+  var embedded = false;
+  try { embedded = window.self !== window.top; } catch (e) { embedded = true; }
+  if (embedded) root.classList.add("embedded");
+  // Opened directly on the local Control Room dashboard (not embedded, not the public Vercel
+  // site) — send it into the dashboard shell instead of showing the bare standalone page.
+  else if (/^(127\.0\.0\.1|localhost)$/.test(location.hostname) && location.pathname.indexOf("/architecture-lab/") === 0) {
+    var qs = new URLSearchParams(location.search);
+    var view = qs.get("tab") === "architect" ? "design-ai" : /sandbox\.html$/.test(location.pathname) ? "design-realplay" : "design-training";
+    location.replace("/?view=" + view);
+  }
   var LABEL = { auto: "🌓 Auto", light: "☀️ Light", dark: "🌙 Dark" };
   function isDark() { return mode === "dark" || (mode === "auto" && window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches); }
   function apply() {
