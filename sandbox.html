@@ -6,11 +6,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="description" content="A free canvas for system design: draw any architecture, run live traffic, inject failures, and see what breaks.">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
-<link rel="stylesheet" href="sandbox.css?v=20261001i-more-pill">
+<link rel="stylesheet" href="sandbox.css?v=20261002d-ref-height-fix">
 <link rel="stylesheet" href="theme-tactical.css">
 <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
 <script src="theme.js"></script>
-<script>if (new URLSearchParams(location.search).get("embed") === "control-room") document.documentElement.classList.add("control-room-embed");</script>
+<script src="embed-flags.js"></script>
 </head>
 <body>
 <header id="bar">
@@ -42,6 +42,7 @@
   <aside id="partsPanel" hidden>
     <div id="partsGrip" title="Drag to resize"></div>
     <div class="ai-deck-head"><span class="architect-kicker">COMPONENTS</span><b>Browse &amp; add</b><p>Always here for ideas — drag any piece onto the canvas.</p><span class="ai-deck-head-btns"><button id="partsWide" title="Make the panel wider or narrower">⤢ Expand</button><button id="partsHide" title="Collapse this panel (more room for the canvas)">Collapse</button></span></div>
+    <div id="partTip" class="part-tip"><p class="muted">Hover a component for what it's best at, and when to pick something else instead.</p></div>
   </aside>
   <aside id="aiDeck" hidden>
     <div id="deckGrip" title="Drag to resize"></div>
@@ -105,6 +106,6 @@
 <script src="lld.js"></script>
 <script src="collapse.js"></script>
 <script src="board.js"></script>
-<script src="sandbox.js?v=20261001i-more-pill"></script>
+<script src="sandbox.js?v=20261002h-public"></script>
 </body>
 </html>

@@ -8,7 +8,8 @@
   });
   if (window.LabExamples) window.LabExamples.LIST.forEach((e, i) => PRESETS.push({ id: "x" + i, name: e.name, cat: e.cat, notice: e.notice, build: () => Object.assign(window.LabExamples.build(e, S.BY_ID), e.blueprint ? { blueprint: e.blueprint } : {}) }));
   const $ = (s) => document.querySelector(s), $$ = (s) => [...document.querySelectorAll(s)];
-  const NW = 132, NH = 66, KEY = "archlab.sandbox.v1";
+  const query = new URLSearchParams(location.search), referenceMode = query.get("reference") === "1", practiceMode = query.get("practice") === "1", referenceExample = query.get("example") || "urlshort";
+  const NW = 132, NH = 66, KEY = practiceMode ? "archlab.practice.v2" : "archlab.sandbox.v1";
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const num = (n) => Math.round(n).toLocaleString("en-US"), money = (n) => "$" + num(n);
   const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
@@ -17,7 +18,7 @@
   // ---------------------------------------------------------------- document
   let doc = null, view = { x: 40, y: 20, z: 1 }, sel = { node: null, edge: null }, tool = "select", linkFrom = null, rubber = null, drag = null, panning = null, spaceDown = false, hoverNodeId = "", deepPart = "";
   let hist = [], histAt = -1, sim = null, timer = null, running = false, speed = 1, mult = 1, chaos = {}, down = {}, lastRec = null, toast = "", chaosCache = null;
-  let tab = (new URLSearchParams(location.search).get("tab")) || "parts";
+  let tab = query.get("tab") || "parts";
   if (!["parts", "inspect", "architect", "delivery", "live", "scenario", "missions", "interview", "blueprint", "collapse", "board"].includes(tab)) tab = "parts";
   // AI Driven is a three-column workspace: decisions, canvas, component design.
   // Keep that layout while users select and inspect components.
@@ -131,8 +132,22 @@
     const removed = new Set(doc.nodes.filter((x) => Number(x.props.__aiLevel || 1) >= removeFrom).map((x) => x.id));
     if (removed.size) { doc.nodes = doc.nodes.filter((x) => !removed.has(x.id)); doc.edges = doc.edges.filter((e) => !removed.has(e.from) && !removed.has(e.to)); }
     const steps = nextLevel === 2 ? levelTwoSteps(n) : levelThreeSteps(n)[1];
-    const rightMost = Math.max(...doc.nodes.map((x) => x.x));
-    const cols = 4, gapX = 190, gapY = 132, startX = rightMost + 260, startY = n.y - 70;
+    // Anchor near the clicked node, not the rightmost node on the whole board -- with several sibling
+    // branches already on the canvas, "rightmost of everything" put the new chain far past the node
+    // actually being drilled into, forcing its connecting wire to cross straight through unrelated
+    // siblings sitting in between (looked like a wrong connection, wasn't one). But "near" on its own
+    // then overlapped whatever already occupied that same patch of canvas -- so clear a path first:
+    // scan existing nodes whose vertical span the new chain would pass through, and if any sit to the
+    // right of the preferred spot, start past the furthest one instead of on top of it. The wire gets
+    // longer when the canvas is crowded, but it goes around real content instead of through it.
+    const cols = 4, gapX = 190, gapY = 132, startY = n.y - 70;
+    const rows = Math.ceil(steps.length / cols);
+    const bandTop = Math.min(n.y, startY) - NH / 2 - 20, bandBottom = startY + (rows - 1) * gapY + NH / 2 + 20;
+    const blockers = doc.nodes.filter((x) => x.id !== n.id && x.y + NH / 2 >= bandTop && x.y - NH / 2 <= bandBottom && x.x > n.x);
+    const clearX = blockers.length ? Math.max(...blockers.map((x) => x.x + NW / 2)) + 110 : 0;
+    // A longer gap here (was 260) gives the level link room to read as its own deliberate jump from
+    // one level to the next, not just a tightly-packed continuation of the same row.
+    const startX = Math.max(n.x + 460, clearX);
     let previous = n.id;
     steps.forEach(([title, sub], i) => {
       const id = `ai-${nextLevel}-${uid()}`, row = Math.floor(i / cols), col = i % cols;
@@ -145,8 +160,15 @@
   }
 
   function fresh(p) { const d = JSON.parse(JSON.stringify(p.build())); d.slo = d.slo || { p95: 200, avail: 99.5, budget: 5000 }; d.scenario = Object.assign({}, S.DEFAULT_SCENARIO, d.scenario || {}); return d; }
+  function practiceStarter() {
+    const d = fresh(PRESETS.find((p) => p.id === "start"));
+    d.name = "Your practice design";
+    d.nodes = [];
+    d.edges = [];
+    return d;
+  }
   function loadDoc() { try { const d = JSON.parse(localStorage.getItem(KEY)); if (d && d.nodes && d.edges) { d.scenario = Object.assign({}, S.DEFAULT_SCENARIO, d.scenario || {}); d.slo = d.slo || { p95: 200, avail: 99.5, budget: 5000 }; return d; } } catch (e) { /* ignore */ } return null; }
-  function persist() { try { localStorage.setItem(KEY, JSON.stringify(doc)); } catch (e) { /* ignore */ } }
+  function persist() { if (referenceMode) return; try { localStorage.setItem(KEY, JSON.stringify(doc)); } catch (e) { /* ignore */ } }
   function snapshot() { hist = hist.slice(0, histAt + 1); hist.push(JSON.stringify(doc)); if (hist.length > 60) hist.shift(); histAt = hist.length - 1; updUndo(); }
   function commit(rebuild) { chaosCache = null; persist(); snapshot(); if (rebuild !== false) rebuildSim(); render(); }
   function undo(d) { const i = histAt + d; if (i < 0 || i >= hist.length) return; histAt = i; doc = JSON.parse(hist[i]); chaosCache = null; sel = { node: null, edge: null }; persist(); rebuildSim(); render(); updUndo(); }
@@ -177,7 +199,37 @@
 
   // ---------------------------------------------------------------- board rendering
   const worldPt = (e) => { const r = $("#board").getBoundingClientRect(); return { x: (e.clientX - r.left - view.x) / view.z, y: (e.clientY - r.top - view.y) / view.z }; };
-  function edgePath(a, b) { const x1 = a.x + NW / 2, y1 = a.y, x2 = b.x - NW / 2, y2 = b.y, dx = Math.max(40, Math.abs(x2 - x1) / 2); return `M${x1} ${y1} C${x1 + dx} ${y1} ${x2 - dx} ${y2} ${x2} ${y2}`; }
+  // Straight orthogonal routing (right-angle elbow, lightly rounded at the corner) instead of a wide
+  // bezier S-curve -- the curve looked clean with one wire on screen but turned into a tangle of
+  // overlapping wobbly lines once a real design had a dozen of them crossing at different heights.
+  function edgePath(a, b) {
+    const x1 = a.x + NW / 2, y1 = a.y, x2 = b.x - NW / 2, y2 = b.y;
+    if (Math.abs(y1 - y2) < 1) return `M${x1} ${y1} L${x2} ${y2}`;
+    const midX = x1 + Math.max(24, (x2 - x1) / 2);
+    const r = Math.max(0, Math.min(10, Math.abs(y2 - y1) / 2, Math.abs(midX - x1), Math.abs(x2 - midX)));
+    const dirY = y2 > y1 ? 1 : -1;
+    return `M${x1} ${y1} L${midX - r} ${y1} Q${midX} ${y1} ${midX} ${y1 + r * dirY} L${midX} ${y2 - r * dirY} Q${midX} ${y2} ${midX + r} ${y2} L${x2} ${y2}`;
+  }
+  // Level links get their own route instead of sharing the standard elbow path: the standard one
+  // picks a midpoint between the two nodes and turns there, which can land right between two
+  // unrelated components if anything else happens to sit in that gap. This one drops straight down
+  // to a lane below every node currently on the board, travels the lane, then rises into the target
+  // -- guaranteed clear of the whole diagram instead of threading through whatever's in the middle.
+  function branchEdgePath(a, b) {
+    const x1 = a.x + NW / 2, y1 = a.y, x2 = b.x - NW / 2, y2 = b.y;
+    const laneY = Math.max(...doc.nodes.map((n) => n.y)) + NH / 2 + 60;
+    if (Math.abs(y1 - laneY) < 1 && Math.abs(y2 - laneY) < 1) return `M${x1} ${y1} L${x2} ${y2}`;
+    const r = 14;
+    // Turn back up to the target's row with room to spare before reaching it (was turning right at
+    // the target's own x, arriving from straight below -- the arrowhead pointed up into the bottom
+    // of the box instead of in from the side like every other wire, and there was no visible gap
+    // between the two levels since the rise happened right at the box edge). Rising earlier leaves a
+    // deliberate horizontal run approaching the target, so the arrow turns and points right like the
+    // rest of the diagram, with real space between the level-2 row and the level-3 box it leads into.
+    const riseX = Math.max(x1 + 40, x2 - 90);
+    const dir = y2 < laneY ? -1 : 1;
+    return `M${x1} ${y1} L${x1} ${laneY - r} Q${x1} ${laneY} ${x1 + r} ${laneY} L${riseX - r} ${laneY} Q${riseX} ${laneY} ${riseX} ${laneY + r * dir} L${riseX} ${y2 - r * dir} Q${riseX} ${y2} ${riseX + r} ${y2} L${x2} ${y2}`;
+  }
   function connected() {
     const out = {}; doc.nodes.forEach((n) => { out[n.id] = []; }); doc.edges.forEach((e) => { if (out[e.from]) out[e.from].push(e.to); });
     const seen = new Set(); const q = doc.nodes.filter((n) => S.BY_ID[n.type].cls === "source").map((n) => n.id); q.forEach((x) => seen.add(x));
@@ -208,24 +260,39 @@
   }
   function render(light) {
     const board = $("#board"), live = connected(), rec = lastRec, nu = (id) => (rec && rec.nodes[id]) || null;
-    const edges = doc.edges.map((e) => {
-      const A = node(e.from), B = node(e.to); if (!A || !B) return "";
+    // With a dozen+ crossing wires on a busy board, picking out "which wire is THIS box's" by eye
+    // alone doesn't work -- so the node currently under the mouse (or selected) gets its own wires
+    // pulled forward (thicker, solid, full opacity, drawn last so they sit on top of the crossing),
+    // and every other wire fades back instead of competing with it for attention.
+    const focusNode = hoverNodeId || sel.node;
+    const edgeList = doc.edges.map((e) => {
+      const A = node(e.from), B = node(e.to); if (!A || !B) return null;
       const fl = rec && rec.edgeFlow && rec.edgeFlow[e.from + "|" + e.to], uB = nu(e.to), hot = uB && uB.util > 1, on = running && (fl > 0.01);
-      const d = edgePath(A, B), mid = { x: (A.x + B.x) / 2, y: (A.y + B.y) / 2 };
+      // Only the edge that actually JUMPS a level (parent level < child level) needs the clear-lane
+      // route -- the plain in-chain links between steps already on the same level are simple
+      // same-row neighbors and look better as the normal short straight segment between them.
+      const isLevelJump = e.aiDrill && Number(A.props.__aiLevel || 1) < Number(B.props.__aiLevel || 0);
+      const d = isLevelJump ? branchEdgePath(A, B) : edgePath(A, B), mid = { x: (A.x + B.x) / 2, y: (A.y + B.y) / 2 };
       const fc = S.BY_ID[node(e.from).type].cls, tc = S.BY_ID[node(e.to).type].cls, ctl = fc === "passive" || fc === "pool" || (fc === "queue" && tc === "queue") ? true : false, evt = !ctl && (tc === "queue" || fc === "queue") && e.fan;
-      // The drill-down chain into a component (Level 2: service internals, Level 3: implementation)
-      // carries the level of the node it leads TO, so each branch gets its own wire color instead of
-      // blending into the plain data-flow wires on the same board.
-      const branchLevel = e.aiDrill ? Number(B.props.__aiLevel || 0) : 0;
-      const branchCls = branchLevel === 2 ? "ai-branch-2" : branchLevel === 3 ? "ai-branch-3" : "";
-      return `<g class="wire ${ctl ? "ctl" : ""} ${evt ? "evt" : ""} ${on ? "flow" : ""} ${hot ? "hot" : ""} ${branchCls} ${sel.edge && sel.edge.from === e.from && sel.edge.to === e.to ? "sel" : ""}"><path class="w" d="${d}" ${e.fan ? 'stroke-dasharray="2 6"' : ""}/><path class="hit" d="${d}" data-edge="${e.from}|${e.to}"/>${rec && fl > 0.5 ? `<text class="wlabel" x="${mid.x}" y="${mid.y - 6}" text-anchor="middle">${num(fl)}/s</text>` : ""}</g>`;
-    }).join("");
+      // Pink is reserved for the jump itself (the one edge that actually crosses from one level to
+      // the next) -- the plain in-chain links between steps already on the same level are a normal
+      // implementation sequence, not a level change, so they stay the default wire color.
+      const branchCls = isLevelJump ? (Number(B.props.__aiLevel) === 2 ? "ai-branch-2" : "ai-branch-3") : "";
+      const touches = focusNode && (e.from === focusNode || e.to === focusNode);
+      const faded = focusNode && !touches;
+      const markup = `<g class="wire ${ctl ? "ctl" : ""} ${evt ? "evt" : ""} ${on ? "flow" : ""} ${hot ? "hot" : ""} ${branchCls} ${touches ? "touch" : ""} ${faded ? "fade" : ""} ${sel.edge && sel.edge.from === e.from && sel.edge.to === e.to ? "sel" : ""}"><path class="w" d="${d}" ${e.fan ? 'stroke-dasharray="2 6"' : ""}/><path class="hit" d="${d}" data-edge="${e.from}|${e.to}"/>${rec && fl > 0.5 ? `<text class="wlabel" x="${mid.x}" y="${mid.y - 6}" text-anchor="middle">${num(fl)}/s</text>` : ""}</g>`;
+      return { touches, markup };
+    }).filter(Boolean);
+    // Touching wires render last (later in the SVG = on top), so they sit visually above every
+    // crossing, unrelated wire instead of getting lost underneath one.
+    const edges = edgeList.filter((x) => !x.touches).map((x) => x.markup).join("") + edgeList.filter((x) => x.touches).map((x) => x.markup).join("");
     const nodes = doc.nodes.map((n) => {
       const def = S.BY_ID[n.type], u = nu(n.id), util = u ? u.util : null, isSrc = def.cls === "source";
       const cls = (util == null || isSrc ? "" : util < 0.7 ? "u-ok" : util <= 1 ? "u-warn" : "u-bad") + (u && u.down ? " down" : "") + (!live.has(n.id) ? " orphan" : "") + (sel.node === n.id ? " sel" : "") + (down[n.id] ? " down" : "");
       const nm = (n.props.name || def.name), fill = util == null ? 0 : clamp(util, 0, 1) * (NW - 24);
       const aiLevel = Number(n.props.__aiLevel || 1);
       return `<g class="node ${cls} ${aiLevel > 1 ? "ai-level-node" : ""}" data-node="${n.id}" transform="translate(${n.x} ${n.y})">
+        ${referenceMode && DOCS.D[n.type] ? `<title>${esc(nm)} — ${esc(DOCS.D[n.type])}</title>` : ""}
         <rect class="box" x="${-NW / 2}" y="${-NH / 2}" width="${NW}" height="${NH}" rx="13"/>
         ${PROV[def.prov] ? `<rect x="${-NW / 2 + 8}" y="${-NH / 2 - 9}" width="${PROV[def.prov][0].length * 6.5 + 10}" height="15" rx="7.5" fill="${PROV[def.prov][1]}"/><text x="${-NW / 2 + 13}" y="${-NH / 2 + 2}" font-size="9.5" font-weight="700" fill="${PROV[def.prov][2]}">${PROV[def.prov][0]}</text>` : ""}
         <text class="ico" x="${-NW / 2 + 10}" y="-8">${def.icon}</text><text class="nm" x="${-NW / 2 + 38}" y="-11">${esc(nm.length > 16 ? nm.slice(0, 15) + "…" : nm)}</text>
@@ -566,6 +633,10 @@
     catch (err) { reviewText = "The mentor review could not run: " + err.message; }
     reviewBusy = false; renderReviewSurface();
   }
+  window.addEventListener("message", (event) => {
+    if (!event.data || event.data.type !== "archlab-review" || referenceMode) return;
+    tab = "architect"; updSide(); aiReview();
+  });
   // ---- AI Architect: a product brief becomes a reviewable starter canvas.
   let architectBusy = false, architectResult = null, architectDraft = "", architectScale = "starter", architectStack = "recommend", architectMode = "ai";
   let architectPrefs = { style: "modular-monolith", frontends: 1, backends: 3, cloud: "aws", cicd: "github-actions", auth: "oidc", audit: "yes", observability: "yes", transaction: "outbox-saga", queue: "kafka" };
@@ -1053,7 +1124,21 @@
   function fitView() {
     if (!doc.nodes.length) return; const r = $("#board").getBoundingClientRect(); const xs = doc.nodes.map((n) => n.x), ys = doc.nodes.map((n) => n.y);
     const minX = Math.min(...xs) - NW, maxX = Math.max(...xs) + NW, minY = Math.min(...ys) - NH * 1.5, maxY = Math.max(...ys) + NH * 1.5;
-    view.z = clamp(Math.min(r.width / (maxX - minX), r.height / (maxY - minY)), 0.3, 1.4); view.x = (r.width - (maxX + minX) * view.z) / 2; view.y = (r.height - (maxY + minY) * view.z) / 2; render();
+    // The reference board reserves a 42px top margin for its label, so the height available to
+    // fit the diagram into is that much shorter than the board itself -- using the full board
+    // height here under-zoomed just enough that tall diagrams ran past the bottom edge.
+    const fitHeight = referenceMode ? r.height - 42 : r.height;
+    view.z = clamp(Math.min(r.width / (maxX - minX), fitHeight / (maxY - minY)), 0.3, 1.4);
+    view.x = (r.width - (maxX + minX) * view.z) / 2;
+    // The reference board is deliberately compact: place its diagram just below its label.
+    // Other canvases retain space for the floating editing toolbar.
+    if (referenceMode) {
+      view.y = 42 - minY * view.z;
+    } else {
+      const desiredTop = 150, bottomSafe = r.height - 72 - maxY * view.z;
+      view.y = Math.max(bottomSafe, desiredTop - minY * view.z);
+    }
+    render();
   }
   function loadPreset(p) { doc = fresh(p); levelPath = [{ level: 1, key: "1", node: null }]; levelCache.clear(); chaosCache = null; $("#title").value = doc.name; sel = { node: null, edge: null }; sim = null; running = false; clearInterval(timer); lastRec = null; chaos = {}; down = {}; hist = []; histAt = -1; snapshot(); persist(); paintButtons(); showBanner(""); render(); fitView(); kpis(); paintChaos(); }
   function useDocument(next) {
@@ -1064,7 +1149,10 @@
   }
   async function memoryApi(path, body) {
     const r = await fetch(path, { method: body ? "POST" : "GET", headers: body ? { "Content-Type": "application/json", "X-YashAI": "1" } : {}, body: body ? JSON.stringify(body) : undefined });
-    const data = await r.json(); if (!r.ok) throw new Error(data.error || "YashAI memory is unavailable"); return data;
+    // The public static copy has no /api server: a 404 HTML page instead of JSON means "not available here".
+    const data = await r.json().catch(() => null);
+    if (!data) throw new Error("AI review, AI Architect and saved projects need the local YashAI app. This online copy runs the simulator only.");
+    if (!r.ok) throw new Error(data.error || "YashAI memory is unavailable"); return data;
   }
   async function openMemory() {
     const list = $("#memoryList"); list.innerHTML = "<p class='muted'>Loading saved projects…</p>"; $("#memory").showModal();
@@ -1090,7 +1178,8 @@
   });
   board.addEventListener("pointermove", (e) => {
     const hovered = e.target.closest && e.target.closest("[data-node]");
-    if (hovered && !drag && !panning && !rubber && hoverNodeId !== hovered.dataset.node) { hoverNodeId = hovered.dataset.node; }
+    const nextHover = hovered && !drag && !panning && !rubber ? hovered.dataset.node : "";
+    if (hoverNodeId !== nextHover) { hoverNodeId = nextHover; if (!drag && !panning && !rubber) render(true); }
     if (panning) { view.x = panning.vx + (e.clientX - panning.sx); view.y = panning.vy + (e.clientY - panning.sy); render(true); return; }
     if (rubber) { const p = worldPt(e); rubber.x2 = p.x; rubber.y2 = p.y; render(true); return; }
     if (drag) { if (!drag.moved && Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy) < 4) return; drag.moved = true; const n = node(drag.id), p = worldPt(e); n.x = Math.round(p.x + drag.dx); n.y = Math.round(p.y + drag.dy); render(true); }
@@ -1285,7 +1374,8 @@
   let startDoc = null;
   try { const m = /^#d=(.+)$/.exec(location.hash); if (m) { startDoc = JSON.parse(decodeURIComponent(escape(atob(m[1])))); if (!startDoc.nodes || !startDoc.edges) startDoc = null; } } catch (e) { startDoc = null; }
   if (startDoc) { try { history.replaceState(null, "", location.pathname + location.search); } catch (e) { /* ignore */ } }
-  doc = startDoc || loadDoc() || fresh(PRESETS.find((p) => p.id === "urlshort"));
+  const referencePreset = PRESETS.find((p) => p.id === referenceExample) || PRESETS.find((p) => p.id === "urlshort");
+  doc = startDoc || (referenceMode ? fresh(referencePreset) : loadDoc()) || (practiceMode ? practiceStarter() : fresh(PRESETS.find((p) => p.id === "urlshort")));
   if (aiWorkspace && doc.nodes.some((n) => n.props && n.props.__aiGenerated)) {
     const removed = new Set(doc.nodes.filter((n) => n.props && n.props.__aiGenerated).map((n) => n.id));
     doc.nodes = doc.nodes.filter((n) => !removed.has(n.id)); doc.edges = doc.edges.filter((e) => !removed.has(e.from) && !removed.has(e.to)); persist();
@@ -1367,7 +1457,31 @@
     if (!document.documentElement.classList.contains("control-room-embed")) return;
     const tools = $("#bar .tools"), stage = $("#stage");
     if (!tools || !stage) return;
+    // Examples (~100 real designs to browse and load while you draw) is a separate button+dropdown
+    // from .tools, not covered by the move above -- without this it stayed trapped inside #bar too,
+    // with the rest of the top bar hidden and no other way to reach it in the embed.
+    const examplesBtn = $("#mPreset"), examplesMenu = $("#presetMenu");
+    if (examplesBtn && examplesMenu) { tools.insertBefore(examplesBtn, tools.firstChild); tools.insertBefore(examplesMenu, tools.firstChild); }
     stage.appendChild(tools);
+    // theme.js (a separate script, loaded in <head>) mounts its own Light/Dark/Auto button into
+    // "#bar .tools" on DOMContentLoaded by looking it up fresh at that moment -- relying on it to
+    // run before this relocation (or re-finding it after) is a cross-script timing race that was
+    // silently losing the button entirely. Give the embed its own color-mode toggle instead, so it
+    // never depends on when/whether theme.js's own mount happened to fire relative to this script.
+    if ($("#themeBtn")) return;
+    const K = "archlab.theme", LABEL = { auto: "🌓 Auto", light: "☀️ Light", dark: "🌙 Dark" };
+    let mode = "auto";
+    try { mode = localStorage.getItem(K) || "auto"; } catch (e) { /* ignore */ }
+    const btn = document.createElement("button");
+    btn.type = "button"; btn.id = "themeBtn";
+    const paint = () => {
+      if (mode === "auto") document.documentElement.removeAttribute("data-theme");
+      else document.documentElement.setAttribute("data-theme", mode);
+      btn.textContent = LABEL[mode]; btn.title = "Color mode: " + mode + " (click to change)";
+    };
+    btn.onclick = () => { mode = mode === "auto" ? "dark" : mode === "dark" ? "light" : "auto"; try { localStorage.setItem(K, mode); } catch (e) { /* ignore */ } paint(); };
+    paint();
+    tools.appendChild(btn);
   })();
   // ---- Component panel (Real Play): the full catalog (#tab-parts, already rendered and wired for
   // search + drag-to-canvas by renderParts()) normally lives inside #side, which stays hidden in the
@@ -1377,10 +1491,27 @@
   // to be useful. Same collapse+resize pattern as the AI deck.
   (function partsPanel() {
     if (!aiWorkspace) return;
-    const parts = $("#tab-parts"), panel = $("#partsPanel");
+    const parts = $("#tab-parts"), panel = $("#partsPanel"), tip = $("#partTip");
     if (!parts || !panel) return;
-    panel.appendChild(parts);
+    panel.insertBefore(parts, tip || null);
     parts.hidden = false;
+    // Hover a component in the catalog -> show the same "pick it when / skip it when" explanation
+    // tipHtml() already builds for the canvas inspector, in the docked footer instead of a floating
+    // card (floating ones used to cover the very buttons being hovered -- see the note further down).
+    if (tip) {
+      parts.addEventListener("mouseover", (e) => {
+        const b = e.target.closest && e.target.closest(".part[data-add]");
+        if (!b || !parts.contains(b)) return;
+        tip.innerHTML = tipHtml(b.dataset.add) || "<p class='muted'>No details for this one yet.</p>";
+      });
+      parts.addEventListener("mouseout", (e) => {
+        const left = e.target.closest && e.target.closest(".part[data-add]");
+        if (!left) return;
+        const to = e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest(".part[data-add]");
+        if (to) return;
+        tip.innerHTML = "<p class='muted'>Hover a component for what it's best at, and when to pick something else instead.</p>";
+      });
+    }
     const PK = "archlab.parts.v1";
     let st = { hidden: false, w: 320 };
     try { st = Object.assign(st, JSON.parse(localStorage.getItem(PK)) || {}); } catch (e) { /* ignore */ }

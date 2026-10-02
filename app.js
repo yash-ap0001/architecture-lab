@@ -4,6 +4,7 @@
   const E = window.LabEngine, LEVELS = window.LabLevels;
   const $app = document.getElementById("app"), $title = document.getElementById("title"), $back = document.getElementById("back"), $total = document.getElementById("totalStars");
   const KEY = "archlab.v1";
+  const directPractice = new URLSearchParams(location.search).get("practice") === "1";
 
   // ---------------------------------------------------------------- progress
   let progress = { levels: {} };
@@ -20,7 +21,7 @@
   const starText = (n) => "★".repeat(n) + "☆".repeat(3 - n);
 
   // ---------------------------------------------------------------- state of the open level
-  let level = null, cfg = null, result = null, tab = "board", hintsShown = 0, mode = "game", kOver = null;
+  let level = null, cfg = null, result = null, tab = "board", hintsShown = 0, mode = "game", kOver = null, practiceExample = "urlshort", referenceVisible = false, practiceLibraryOpen = false;
 
   function go(id) {
     stopPlay(); mode = "game"; kOver = null;
@@ -48,6 +49,9 @@
         <article><span>02</span><h3>Design it</h3><p>Add and connect the components the lesson unlocks.</p></article>
         <article><span>03</span><h3>Run traffic</h3><p>Watch latency, errors, cost, and any incident play out.</p></article>
         <article><span>04</span><h3>Improve it</h3><p>Use the post-mortem, earn a star, and unlock the next scenario.</p></article>
+      </section>
+      <section class="card training-playground">
+        <div class="training-levels-head"><div><span class="cr-badge">Reference practice</span><h2>Study it. Hide it. Rebuild it.</h2><p class="muted training-next-copy">Pick a real system, inspect the reference canvas, hide it, then draw your own version below. The local mentor reviews your design when you are ready.</p></div><div class="training-next-action"><button class="primary" data-open-practice="1">Start reference practice</button></div></div>
       </section>
       <section class="card training-levels">
         <div class="training-levels-head"><div><span class="cr-badge">Guided practice</span><h2>Choose your next challenge</h2><p class="muted training-next-copy">Start with the recommended lesson, or return to any unlocked lesson to improve your score.</p></div><div class="training-next-action"><span class="muted">${totalStars()} stars earned</span><button class="primary training-start" data-next-lesson="1">Start Level ${next.id}: ${esc(next.title)}</button></div></div>
@@ -630,7 +634,43 @@
   }
   function flash(btn, msg) { const t = btn.textContent; btn.textContent = msg; setTimeout(() => { btn.textContent = t; }, 1500); }
 
-  function render() { if (mode === "studio") return studioView(); if (mode === "studio-home") return studioHome(); level ? levelView() : home(); }
+  function render() { if (mode === "practice") return practiceView(); if (mode === "studio") return studioView(); if (mode === "studio-home") return studioHome(); level ? levelView() : home(); }
+
+  function practiceView() {
+    const embedded = document.documentElement.classList.contains("control-room-embed");
+    const examples = [
+      ["urlshort", "URL shortener", "High-read redirects: cache hot links, keep writes durable, and prevent a database bottleneck.",
+        "This is a read-heavy system: far more people click a short link than create one. The load balancer spreads incoming clicks across app servers so no single server is overwhelmed; the cache sits in front of the database and absorbs most of that read traffic, since the same popular links get clicked over and over. The database only needs to be fast for the smaller slice of writes (new links) and for cache misses. Watch what happens to database load if you remove the cache, or what happens to tail latency if one app server goes down without a load balancer in front."],
+      ["news", "News site", "A read-heavy publishing system: CDN, cache, search, article updates, and traffic spikes.",
+        "A CDN sits in front of everything because most requests are for the same handful of articles, especially during a traffic spike -- serving those from edge locations means your own servers barely see the load. The cache behind the CDN protects the database from the smaller slice of traffic the CDN doesn't catch. Search is a separate concern from the main database because search queries (full-text, ranked) are a different access pattern than simple lookups. Notice how the design assumes reads vastly outnumber writes (new articles are rare compared to article views)."],
+      ["events", "Event ingestion", "Accept a burst of events safely, buffer work, process consumers, and keep data queryable.",
+        "The core idea here is decoupling accepting an event from processing it. A burst of events arrives faster than you can process them one-by-one, so a queue absorbs the burst and lets consumers work through it at a sustainable pace instead of falling over. This trades immediacy (events aren't processed the instant they arrive) for durability (nothing gets dropped during a spike). Watch what happens to the queue depth during a traffic burst, and what happens if a consumer is too slow relative to the arrival rate."],
+      ["payments", "Payments API", "Move money safely with idempotency, transaction boundaries, audit records, and failure recovery.",
+        "Correctness matters more than speed here. An API gateway in front handles auth and rate limiting before a request ever reaches the payment logic. The database needs real transaction boundaries and replication for high availability, since losing a payment record is unacceptable. The external payment provider is modeled as a dependency that can fail or be slow -- notice it's drawn as a separate, limited-capacity node, because a real payment processor has its own rate limits and latency you don't control."],
+      ["rag", "LLM chat with RAG", "Serve chat requests with retrieval, vector search, model calls, guardrails, and observability.",
+        "A chat request isn't answered directly by the model -- it first goes through retrieval: a vector database finds relevant context, which gets added to the prompt before the LLM call. This is why vector search and the LLM are separate nodes with different cost/latency profiles (vector search is cheap and fast; the LLM call is slow and expensive). The gateway in front can add caching, rate limiting, and guardrails before an expensive model call happens. Watch the simulation's latency numbers -- the LLM step dominates almost everything else."],
+      ["jobs", "Remote job discovery", "Discover companies, crawl job boards, match resumes, prepare applications, and keep proof in local memory.",
+        "This pipeline has distinct stages that each do one job: discover companies, crawl their boards, match postings to a resume, then prepare an application -- each stage writes its result for the next one to read, rather than one giant function doing everything. A search index sits alongside the main database because searching/matching jobs is a different access pattern than storing raw crawl data. Notice the queue between crawling and the database: crawling is bursty and unreliable (sites change, fail, rate-limit you), so buffering that work protects the rest of the pipeline from crawl failures."],
+      ["storm", "Retry storm", "See how retries amplify a dependency failure, then add limits, queues, and backoff.",
+        "This one is a cautionary example on purpose. When a downstream dependency slows down or fails, naive retries can multiply the load on it -- each failed request becomes 2, 3, or more retried requests, making the failure worse instead of better. Run the simulation and break the dependency to watch retries amplify the problem, then add a rate limiter, a queue, or backoff/circuit-breaking and re-run it to see the difference. The lesson is that retries without limits are not a safety net, they're an accelerant."],
+      ["global", "Global failover app", "Keep a worldwide app available through region routing, replicated data, and controlled failover.",
+        "Users in different regions are routed to the nearest healthy region by a global load balancer, so normal traffic never crosses an ocean. Data is replicated between regions so a failover doesn't mean starting from zero. The interesting part is the failure case: when one region goes down, traffic has to shift to the other region's capacity, which means that region needs enough spare capacity to absorb it. Try the region-failure simulation and watch what the surviving region's load looks like."]
+    ];
+    const current = examples.find((x) => x[0] === practiceExample);
+    const refSrc = `sandbox.html?reference=1&example=${practiceExample}&embed=${embedded ? "control-room" : "none"}`;
+    $title.textContent = "Reference practice"; $back.hidden = directPractice; $total.textContent = "";
+    $app.innerHTML = `<section class="practice-shell">
+      <header class="practice-head"><div class="practice-intro"><span class="cr-badge">Learn by rebuilding</span><h2>${esc(current[1])}</h2><p>${esc(current[2])}</p><div class="practice-meta"><span>Guided exercise</span><span>Reference included</span><span>Build → simulate → review</span></div></div><div class="practice-actions"><button class="ghost" data-toggle-practice-library="1">${practiceLibraryOpen ? "Close examples" : "Browse examples"}</button><label>Example <select data-practice-example>${examples.map(([id, label]) => `<option value="${id}" ${id === practiceExample ? "selected" : ""}>${label}</option>`).join("")}</select></label><button class="primary practice-review" data-practice-review="1">Review my design</button></div></header>
+      ${practiceLibraryOpen ? `<section class="practice-library" aria-label="System design example library"><div class="practice-library-head"><div><b>Example library</b><small>Open any example to read its goal and load its reference diagram.</small></div><span>${examples.length} systems</span></div><div class="practice-library-grid">${examples.map(([id, title, description]) => `<article class="practice-example ${id === practiceExample ? "selected" : ""}"><span>${id === practiceExample ? "OPEN" : "EXAMPLE"}</span><h3>${esc(title)}</h3><p>${esc(description)}</p><button data-practice-pick="${id}">${id === practiceExample ? "Viewing diagram" : "Open diagram"}</button></article>`).join("")}</div></section>` : ""}
+      <details class="practice-reference-card" ${referenceVisible ? "open" : ""}><summary><span>Reference design · ${esc(current[1])}</span><small>Request path and components · click to ${referenceVisible ? "collapse" : "expand"}</small></summary>
+        <div class="practice-reference-body">
+          <div class="practice-reference-canvas"><button class="ghost practice-reference-pop" data-open-reference-dialog="1" data-ref-title="${esc(current[1])}" data-ref-src="${refSrc}">⤢ Open full size</button><iframe class="practice-reference" src="${refSrc}" title="${esc(current[1])} reference architecture"></iframe></div>
+          <div class="practice-reference-learn"><b>What to learn from this design</b><p>${esc(current[3])}</p></div>
+        </div>
+      </details>
+      <section class="practice-step practice-draw"><div class="practice-step-head"><span>Build</span><div><b>Your playground</b><small>Choose a component on the right, place it on the canvas, then connect the request flow.</small></div><em>Start with the entry point</em></div><iframe id="practiceBoard" class="practice-board" src="sandbox.html?practice=1&tab=architect&embed=${embedded ? "control-room" : "none"}" title="Your architecture canvas"></iframe></section>
+    </section>`;
+  }
 
   // ---------------------------------------------------------------- events
   function setPath(path, val) {
@@ -643,9 +683,30 @@
 
   document.addEventListener("click", (e) => {
     const t = e.target.closest("button"); if (!t) return;
+    if (t.dataset.openPlayground) {
+      // Real Play (sandbox.html) is the actual free-draw canvas: the full 330-component catalog,
+      // ~100 example designs to browse while you draw, live traffic, and a real AI mentor review --
+      // Studio mode here covers draw+simulate but its own "Findings" are local rules, not an AI call,
+      // and it doesn't have the example library. Embedding it in-page keeps Playground a tab of
+      // Learn, not a trip to a different sidebar page.
+      mode = "playground"; level = null; return render();
+    }
+    if (t.dataset.openPractice) { mode = "practice"; level = null; return render(); }
+    if (t.dataset.openReferenceDialog) {
+      const dlg = document.getElementById("referenceDialog");
+      document.getElementById("referenceDialogTitle").textContent = "Reference design · " + t.dataset.refTitle;
+      document.getElementById("referenceDialogFrame").src = t.dataset.refSrc;
+      if (dlg && typeof dlg.showModal === "function") dlg.showModal();
+      return;
+    }
+    if (t.id === "referenceDialogClose") { const dlg = document.getElementById("referenceDialog"); if (dlg) dlg.close(); return; }
+    if (t.dataset.togglePracticeLibrary) { practiceLibraryOpen = !practiceLibraryOpen; return render(); }
+    if (t.dataset.practicePick) { practiceExample = t.dataset.practicePick; referenceVisible = true; practiceLibraryOpen = false; return render(); }
+    if (t.dataset.toggleReference) { referenceVisible = !referenceVisible; return render(); }
+    if (t.dataset.practiceReview) { const board = document.getElementById("practiceBoard"); if (board && board.contentWindow) board.contentWindow.postMessage({ type: "archlab-review" }, "*"); flash(t, "Reviewing your canvas…"); return; }
     if (t.dataset.nextLesson) return go(nextLesson().id);
     if (t.dataset.level) return go(+t.dataset.level);
-    if (t.id === "back") { stopPlay(); if (mode === "studio") { mode = "studio-home"; level = null; return render(); } if (mode === "studio-home") { mode = "game"; return render(); } level = null; return render(); }
+    if (t.id === "back") { stopPlay(); if (mode === "practice") { mode = "game"; return render(); } if (mode === "studio") { mode = "studio-home"; level = null; return render(); } if (mode === "studio-home") { mode = "game"; return render(); } level = null; return render(); }
     if (t.dataset.mode === "studio") { mode = "studio-home"; return render(); }
     if (t.dataset.studioNew) { const np = STUDIO_DEFAULT(); progress.studio = progress.studio || { projects: [] }; progress.studio.projects.push(np); save(); enterProject(np); return render(); }
     if (t.dataset.studioOpen) { const op = projects().find((x) => x.id === t.dataset.studioOpen); if (op) { enterProject(op); render(); window.scrollTo(0, 0); } return; }
@@ -702,7 +763,39 @@
     }
   });
 
+  // <details>'s own "toggle" event doesn't bubble, so it has to be caught in the capture phase to
+  // reach a single delegated listener here -- without this, clicking the summary toggled the native
+  // element open/closed but never told the app, so the next re-render (e.g. picking a new example)
+  // snapped it back to whatever referenceVisible last was, fighting the user's own click.
+  // Native <dialog> doesn't close on a backdrop click by default -- a click lands on the <dialog>
+  // element itself only when it's outside the content box (CSS gives the content its own padding
+  // box), so this is the standard way to detect "clicked the dim area, not the card".
+  (function () {
+    const dlg = document.getElementById("referenceDialog");
+    if (!dlg) return;
+    dlg.addEventListener("click", (e) => { if (e.target === dlg) dlg.close(); });
+    dlg.addEventListener("close", () => { document.getElementById("referenceDialogFrame").src = "about:blank"; });
+  })();
+  document.addEventListener("toggle", (e) => {
+    if (!e.target || !e.target.classList || !e.target.classList.contains("practice-reference-card")) return;
+    referenceVisible = e.target.open;
+    // Patch just the label in place instead of a full render() -- re-rendering here would
+    // regenerate the reference and playground <iframe> tags, reloading both (and losing whatever
+    // the user had just drawn) just because they expanded a summary.
+    const label = e.target.querySelector("summary small");
+    if (label) label.textContent = `Request path and components · click to ${referenceVisible ? "collapse" : "expand"}`;
+    // A closed <details> has zero-size content, so the reference iframe's own first fitView()
+    // ran against a 0x0 board and produced a degenerate zoom/pan; its resize-observer treats the
+    // next (now-real-size) measurement as a fresh baseline rather than a change, so it never
+    // re-fits on its own. Reloading the src on open re-runs fitView() once the card's real size
+    // is in effect, which is harmless since this iframe is a read-only reference, not user work.
+    if (referenceVisible) {
+      const refFrame = e.target.querySelector(".practice-reference");
+      if (refFrame && refFrame.contentWindow) refFrame.contentWindow.location.reload();
+    }
+  }, true);
   document.addEventListener("change", (e) => {
+    if (e.target && e.target.dataset && e.target.dataset.practiceExample) { practiceExample = e.target.value; referenceVisible = true; return render(); }
     if (e.target.dataset && e.target.dataset.autowire) { autoWire = e.target.checked; return; }
     const t = e.target; if (mode !== "studio") return; const p = project(); if (!p) return;
     if (t.dataset.spec) { const k = t.dataset.spec; p[k] = ["name", "shape"].includes(k) ? t.value : Math.max(0, +t.value || 0); }
@@ -725,6 +818,7 @@
       const wantId = lvlParam === "next" ? nextLesson().id : Number(lvlParam);
       if (LEVELS.some((l) => l.id === wantId)) go(wantId);
     } else if (qs.get("studio") === "1") mode = "studio-home";
+    else if (qs.get("practice") === "1") mode = "practice";
   }
   if (!level) render();
 })();

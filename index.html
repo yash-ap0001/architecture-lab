@@ -13,11 +13,11 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icon-180.png">
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=20261002i-ref-full-width">
 <link rel="stylesheet" href="style-tactical.css">
 <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
 <script src="theme.js"></script>
-<script>if(new URLSearchParams(location.search).get("embed")==="control-room")document.documentElement.classList.add("control-room-embed");</script>
+<script src="embed-flags.js"></script>
 </head>
 <body>
 <header class="top">
@@ -26,10 +26,14 @@
   <span id="totalStars" class="stars-total" aria-label="Total stars"></span>
 </header>
 <main id="app" aria-live="polite"></main>
+<dialog id="referenceDialog" class="reference-dialog">
+  <div class="reference-dialog-head"><b id="referenceDialogTitle">Reference design</b><button id="referenceDialogClose" class="icon" aria-label="Close">&times;</button></div>
+  <iframe id="referenceDialogFrame" class="reference-dialog-frame" title="Reference architecture, full size"></iframe>
+</dialog>
 <footer class="foot">Learning model. The numbers are round teaching values, not benchmarks. Do not size a real system from them.</footer>
 <script src="engine.js?v=cr1"></script>
 <script src="levels.js?v=cr1"></script>
 <script src="graph.js?v=cr1"></script>
-<script src="app.js?v=20261001-training-path"></script>
+<script src="app.js?v=20261002m-ref-refit-on-open"></script>
 </body>
 </html>
