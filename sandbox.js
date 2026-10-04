@@ -4,11 +4,16 @@
   const S = window.LabSim, PRESETS = window.LabPresets.PRESETS;
   PRESETS.forEach((p) => {
     p.cat = p.cat || "Classics";
-    if (p.id !== "start" && window.LabExamples) { const orig = p.build; p.build = () => window.LabExamples.endToEnd(orig(), S.BY_ID); }
+    if (p.id !== "start" && window.LabExamples) { const orig = p.build; p.coreBuild = orig; p.build = () => window.LabExamples.endToEnd(orig(), S.BY_ID); }
   });
   if (window.LabExamples) window.LabExamples.LIST.forEach((e, i) => PRESETS.push({ id: "x" + i, name: e.name, cat: e.cat, notice: e.notice, build: () => Object.assign(window.LabExamples.build(e, S.BY_ID), e.blueprint ? { blueprint: e.blueprint } : {}) }));
   const $ = (s) => document.querySelector(s), $$ = (s) => [...document.querySelectorAll(s)];
   const query = new URLSearchParams(location.search), referenceMode = query.get("reference") === "1", practiceMode = query.get("practice") === "1", referenceExample = query.get("example") || "urlshort";
+  const guideId = practiceMode ? query.get("guide") || "" : "";
+  // Skill level is shared by Mentor, Learn and Real Play (same origin, one localStorage key).
+  const LEVELS = [["beginner", "Beginner"], ["intermediate", "Intermediate"], ["advanced", "Advanced"]];
+  let skill = ""; try { skill = query.get("level") || localStorage.getItem("yashai.level") || ""; } catch (e) { skill = query.get("level") || ""; }
+  if (!LEVELS.some(([k]) => k === skill)) skill = "";
   const NW = 132, NH = 66, KEY = practiceMode ? "archlab.practice.v2" : "archlab.sandbox.v1";
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const num = (n) => Math.round(n).toLocaleString("en-US"), money = (n) => "$" + num(n);
@@ -19,6 +24,13 @@
   let doc = null, view = { x: 40, y: 20, z: 1 }, sel = { node: null, edge: null }, tool = "select", linkFrom = null, rubber = null, drag = null, panning = null, spaceDown = false, hoverNodeId = "", deepPart = "";
   let hist = [], histAt = -1, sim = null, timer = null, running = false, speed = 1, mult = 1, chaos = {}, down = {}, lastRec = null, toast = "", chaosCache = null;
   let tab = query.get("tab") || "parts";
+  const C = window.LabCost;   // budget & cost plan (cost.js)
+  const STU = window.LabStudio, SCN = window.LabScenarios, EXP = window.LabExports;
+  // multi = extra selected boxes (shift-click / shift-drag); highlight = a scenario's path shown on the canvas
+  let multi = new Set(), marquee = null, highlight = new Set(), viewMode = "arch", playScript = null;
+  try { viewMode = localStorage.getItem("archlab.view") || "arch"; } catch (e) { /* ignore */ }
+  let costOpts = { trafficMult: 1, provider: "aws", priority: "balanced", uptime: 99.9, users: 0, envs: { dev: true, staging: true } }, costSeededFrom = "";
+  let costTimer = null, costLast = null, costDelta = 0;
   if (!["parts", "inspect", "architect", "delivery", "live", "scenario", "missions", "interview", "blueprint", "collapse", "board"].includes(tab)) tab = "parts";
   // AI Driven is a three-column workspace: decisions, canvas, component design.
   // Keep that layout while users select and inspect components.
@@ -103,7 +115,7 @@
     if (!stage || !side || !third) return;
     const current = levelPath[levelPath.length - 1].level;
     const panelTitles = { 1: "System canvas", 2: "Service internals", 3: "Implementation detail" };
-    stage.style.order = ""; stage.className = "level-main"; stage.dataset.level = current; stage.dataset.levelTitle = "System · service · implementation";
+    stage.style.order = ""; stage.className = "level-main"; stage.dataset.level = current; stage.dataset.levelTitle = panelTitles[current] + (current === 1 ? " · double-click a box to open it" : "");
     side.hidden = true; third.hidden = true;
     side.className = ""; third.className = "";
     delete side.dataset.jumpLevel; delete third.dataset.jumpLevel;
@@ -170,8 +182,8 @@
   function loadDoc() { try { const d = JSON.parse(localStorage.getItem(KEY)); if (d && d.nodes && d.edges) { d.scenario = Object.assign({}, S.DEFAULT_SCENARIO, d.scenario || {}); d.slo = d.slo || { p95: 200, avail: 99.5, budget: 5000 }; return d; } } catch (e) { /* ignore */ } return null; }
   function persist() { if (referenceMode) return; try { localStorage.setItem(KEY, JSON.stringify(doc)); } catch (e) { /* ignore */ } }
   function snapshot() { hist = hist.slice(0, histAt + 1); hist.push(JSON.stringify(doc)); if (hist.length > 60) hist.shift(); histAt = hist.length - 1; updUndo(); }
-  function commit(rebuild) { chaosCache = null; persist(); snapshot(); if (rebuild !== false) rebuildSim(); render(); }
-  function undo(d) { const i = histAt + d; if (i < 0 || i >= hist.length) return; histAt = i; doc = JSON.parse(hist[i]); chaosCache = null; sel = { node: null, edge: null }; persist(); rebuildSim(); render(); updUndo(); }
+  function commit(rebuild) { chaosCache = null; persist(); snapshot(); if (rebuild !== false) rebuildSim(); render(); scheduleCost(); }
+  function undo(d) { const i = histAt + d; if (i < 0 || i >= hist.length) return; histAt = i; doc = JSON.parse(hist[i]); chaosCache = null; sel = { node: null, edge: null }; multi.clear(); highlight.clear(); persist(); rebuildSim(); render(); updUndo(); scheduleCost(); }
   function updUndo() { $("#undo").disabled = histAt <= 0; $("#redo").disabled = histAt >= hist.length - 1; }
   const node = (id) => doc.nodes.find((n) => n.id === id);
   const graphForSim = () => ({ nodes: doc.nodes.map((n) => ({ id: n.id, type: n.type, props: Object.assign({}, n.props, { name: n.props.name || S.BY_ID[n.type].name }) })), edges: doc.edges });
@@ -185,13 +197,22 @@
   function start() {
     if (!sim) { const s = S.createSim(graphForSim(), doc.scenario); if (s.error) { showBanner(s.error, "bad"); return; } sim = s; lastRec = null; }
     running = !running; clearInterval(timer); if (running) timer = setInterval(tick, Math.round(300 / speed)); paintButtons();
+    if (running) noteGuide("ran");
   }
-  function stop() { running = false; clearInterval(timer); sim = null; lastRec = null; chaos = {}; down = {}; showBanner(""); paintButtons(); render(); kpis(); }
+  function stop() { running = false; clearInterval(timer); sim = null; lastRec = null; chaos = {}; down = {}; playScript = null; showBanner(""); paintButtons(); render(); kpis(); }
   function tick() {
+    if (playScript) {
+      const on = sim.t >= playScript.from && sim.t < playScript.to;
+      playScript.keys.forEach((k) => { chaos[k] = on; }); paintChaos();
+      if (sim.t >= playScript.end) { playScript = null; running = false; clearInterval(timer); paintButtons(); showBanner("Scenario finished: the fault was injected and removed. ▶ continues normal traffic, ■ resets.", "warn"); return; }
+    }
     const rec = S.step(sim, { trafficMult: mult, chaos, down }); lastRec = rec; render(true); kpis();
+    if (sim.t % 4 === 0) paintGuide();
     const over = Object.entries(rec.nodes).filter(([id, v]) => doc.nodes.find((n) => n.id === id) && S.BY_ID[node(id).type].cls !== "source" && v.util > 1).sort((a, b) => b[1].util - a[1].util)[0];
-    if (over) showBanner(`${node(over[0]).props.name || S.BY_ID[node(over[0]).type].name} is over capacity (${Math.round(over[1].util * 100)}%). Requests are being dropped.`, "bad");
-    else if (Object.values(chaos).some(Boolean) || Object.values(down).some(Boolean)) showBanner("A failure is being injected.", "warn");
+    if (over) showBanner(over[1].down ? `${node(over[0]).props.name || S.BY_ID[node(over[0]).type].name} is down. Requests that need it fail until it recovers.` : `${node(over[0]).props.name || S.BY_ID[node(over[0]).type].name} is over capacity (${Math.round(over[1].util * 100)}%). Requests are being dropped.`, "bad");
+    else if (Object.values(chaos).some(Boolean) || Object.values(down).some(Boolean)) showBanner(playScript ? `${playScript.name}: fault active (${Math.max(0, Math.round((playScript.to - sim.t) * S.TICK_S / 60))} simulated min left).` : "A failure is being injected.", "warn");
+    else if (playScript && sim.t < playScript.from) showBanner(`${playScript.name}: normal traffic, the fault starts in ${Math.round((playScript.from - sim.t) * S.TICK_S / 60)} simulated min.`, "warn");
+    else if (playScript) showBanner(`${playScript.name}: fault removed, watching recovery.`, "warn");
     else showBanner("");
   }
   function paintButtons() { $("#play").textContent = running ? "⏸ Pause" : sim ? "▶ Resume" : "▶ Start"; }
@@ -203,6 +224,13 @@
   // bezier S-curve -- the curve looked clean with one wire on screen but turned into a tangle of
   // overlapping wobbly lines once a real design had a dozen of them crossing at different heights.
   function edgePath(a, b) {
+    const dyAB = b.y - a.y;
+    if (b.x - NW / 2 < a.x + NW / 2 + 20 && Math.abs(dyAB) > NH) {   // target is on another row and not to the right: leave from the bottom (or top) instead of looping around
+      const s = dyAB > 0 ? 1 : -1, X1 = a.x, Y1 = a.y + s * NH / 2, X2 = b.x, Y2 = b.y - s * NH / 2;
+      if (Math.abs(X1 - X2) < 1) return `M${X1} ${Y1} L${X2} ${Y2}`;
+      const midY = (Y1 + Y2) / 2, dx = X2 > X1 ? 1 : -1, r = Math.max(0, Math.min(10, Math.abs(X2 - X1) / 2, Math.abs(midY - Y1)));
+      return `M${X1} ${Y1} L${X1} ${midY - r * s} Q${X1} ${midY} ${X1 + r * dx} ${midY} L${X2 - r * dx} ${midY} Q${X2} ${midY} ${X2} ${midY + r * s} L${X2} ${Y2}`;
+    }
     const x1 = a.x + NW / 2, y1 = a.y, x2 = b.x - NW / 2, y2 = b.y;
     if (Math.abs(y1 - y2) < 1) return `M${x1} ${y1} L${x2} ${y2}`;
     const midX = x1 + Math.max(24, (x2 - x1) / 2);
@@ -258,8 +286,43 @@
     if (c === "source") return "traffic"; if (c === "external") return `${Math.round((p.ratio == null ? 0.1 : p.ratio) * 100)}% of calls`; if (c === "passive") return "watching";
     return `× ${p.inst || 1}${p.auto ? " auto" : ""}${p.ha ? " · HA" : ""}${p.retries > 0 ? ` · ↻${p.retries}` : ""}${p.breaker ? " · ⛔cb" : ""}`;
   }
+  // ---- views: the same canvas seen through one concern (layers, trust zones, data, deployment, CI/CD, cost)
+  const VIEWS = [["arch", "Architecture (HLD)"], ["layers", "Layers"], ["security", "Security & trust boundaries"], ["dataflow", "Data flow"], ["data", "Data model"], ["deploy", "Deployment"], ["cicd", "CI/CD"], ["cost", "Cost"]];
+  let viewCostKey = null, viewCostRows = {};
+  function viewInfo() {
+    if (viewMode === "arch" || !STU) return null;
+    const D = (n) => S.BY_ID[n.type], Lr = (n) => STU.layerOf(D(n)), Z = (n) => STU.zoneOf(D(n));
+    const v = { dim: () => false, badge: () => "", group: null, hot: () => false, color: null };
+    if (viewMode === "layers") { v.group = Lr; v.color = (k) => STU.LAYER_COLORS[k] || "#888"; }
+    else if (viewMode === "security") {
+      v.group = Z; v.color = (k) => ({ Public: "#b91c1c", "Edge (DMZ)": "#c2410c", "Private application": "#6d3fd0", Data: "#b45309", "Management plane": "#475569", "Third party": "#9a3412" }[k] || "#888");
+      const f = lintNow(), hot = new Set(); if (f) f.findings.filter((x) => ["security", "ai", "compliance"].includes(x.cat) && ["critical", "high"].includes(x.sev)).forEach((x) => x.nodes.forEach((id) => hot.add(id)));
+      v.hot = (n) => hot.has(n.id); v.badge = (n) => (hot.has(n.id) ? "⚠ security finding" : "");
+    } else if (viewMode === "dataflow") v.dim = (n) => ["passive", "pool"].includes(D(n).cls) || ["DevOps", "Observability"].includes(Lr(n));
+    else if (viewMode === "cicd") v.dim = (n) => Lr(n) !== "DevOps";
+    else if (viewMode === "data") {
+      const keep = new Set(doc.nodes.filter((n) => Lr(n) === "Data" || D(n).cls === "queue").map((n) => n.id));
+      doc.edges.forEach((e) => { const a = node(e.from); if (a && keep.has(e.to) && D(a).cls === "service") keep.add(e.from); });
+      v.dim = (n) => !keep.has(n.id);
+      v.badge = (n) => { if (!["db", "store"].includes(D(n).cls)) return ""; const w = [...new Set(doc.edges.filter((e) => e.to === n.id && node(e.from) && D(node(e.from)).cls === "service").map((e) => e.from))]; return w.length > 1 ? `shared by ${w.length} services` : w.length ? `owner: ${(node(w[0]).props.name || D(node(w[0])).name).slice(0, 18)}` : "no owner"; };
+      v.hot = (n) => / shared/.test(v.badge(n));
+    } else if (viewMode === "deploy") v.badge = (n) => { const p = n.props, c = D(n).cls; if (["source", "passive"].includes(c)) return ""; return [p.region ? String(p.region).toUpperCase() : "", c === "db" ? (p.ha ? "multi-AZ" : "single AZ") : ["service", "proxy", "router"].includes(c) ? `×${p.inst || 1}${p.auto ? " auto" : ""}${p.ha ? " HA" : ""}` : "", p.deploy && p.deploy !== "rolling" ? p.deploy : ""].filter(Boolean).join(" · "); };
+    else if (viewMode === "cost" && C) {
+      const key = hist[histAt] + "|" + costOpts.trafficMult;
+      if (key !== viewCostKey) { viewCostKey = key; try { const r = C.sizeAndPrice(graphForSim(), doc.scenario, (+doc.scenario.base || 1000) * costOpts.trafficMult, "asis", false); viewCostRows = (r && r.rows) || {}; } catch (e) { viewCostRows = {}; } }
+      const tot = Object.values(viewCostRows).reduce((a, r) => a + (r.cost || 0), 0) || 1;
+      v.badge = (n) => (viewCostRows[n.id] && viewCostRows[n.id].cost ? `${money(viewCostRows[n.id].cost)}/mo · ${Math.round(100 * viewCostRows[n.id].cost / tot)}%` : "");
+      v.hot = (n) => viewCostRows[n.id] && viewCostRows[n.id].cost / tot > 0.15;
+    }
+    return v;
+  }
+  function bandSvg(ns, label, col, opts) {
+    if (!ns.length) return "";
+    const pad = (opts && opts.pad) || 24, x0 = Math.min(...ns.map((n) => n.x)) - NW / 2 - pad, x1 = Math.max(...ns.map((n) => n.x)) + NW / 2 + pad, y0 = Math.min(...ns.map((n) => n.y)) - NH / 2 - pad - 10, y1 = Math.max(...ns.map((n) => n.y)) + NH / 2 + pad;
+    return `<g class="band ${(opts && opts.cls) || ""}"${opts && opts.group ? ` data-group="${esc(opts.group)}"` : ""}><rect x="${x0}" y="${y0}" width="${x1 - x0}" height="${y1 - y0}" rx="20" fill="${col}" opacity="${(opts && opts.op) || 0.06}" stroke="${col}" stroke-opacity=".55" stroke-dasharray="8 6"/><text x="${x0 + 12}" y="${y0 + 18}" font-size="13" font-weight="700" fill="${col}">${esc(label)}</text></g>`;
+  }
   function render(light) {
-    const board = $("#board"), live = connected(), rec = lastRec, nu = (id) => (rec && rec.nodes[id]) || null;
+    const board = $("#board"), live = connected(), rec = lastRec, nu = (id) => (rec && rec.nodes[id]) || null, vi = viewInfo();
     // With a dozen+ crossing wires on a busy board, picking out "which wire is THIS box's" by eye
     // alone doesn't work -- so the node currently under the mouse (or selected) gets its own wires
     // pulled forward (thicker, solid, full opacity, drawn last so they sit on top of the crossing),
@@ -279,8 +342,11 @@
       // implementation sequence, not a level change, so they stay the default wire color.
       const branchCls = isLevelJump ? (Number(B.props.__aiLevel) === 2 ? "ai-branch-2" : "ai-branch-3") : "";
       const touches = focusNode && (e.from === focusNode || e.to === focusNode);
-      const faded = focusNode && !touches;
-      const markup = `<g class="wire ${ctl ? "ctl" : ""} ${evt ? "evt" : ""} ${on ? "flow" : ""} ${hot ? "hot" : ""} ${branchCls} ${touches ? "touch" : ""} ${faded ? "fade" : ""} ${sel.edge && sel.edge.from === e.from && sel.edge.to === e.to ? "sel" : ""}"><path class="w" d="${d}" ${e.fan ? 'stroke-dasharray="2 6"' : ""}/><path class="hit" d="${d}" data-edge="${e.from}|${e.to}"/>${rec && fl > 0.5 ? `<text class="wlabel" x="${mid.x}" y="${mid.y - 6}" text-anchor="middle">${num(fl)}/s</text>` : ""}</g>`;
+      const faded = (focusNode && !touches) || (vi && (vi.dim(A) || vi.dim(B))) || (highlight.size && !(highlight.has(e.from) && highlight.has(e.to)));
+      const zoneX = vi && viewMode === "security" && STU.zoneOf(S.BY_ID[A.type]) !== STU.zoneOf(S.BY_ID[B.type]);
+      const dataCls = viewMode === "dataflow" && e.classification ? "dc-" + esc(e.classification) : "";
+      const vlabel = viewMode === "dataflow" && !rec ? [e.classification, e.payload].filter(Boolean).join(" · ") : "";
+      const markup = `<g class="wire ${ctl ? "ctl" : ""} ${evt ? "evt" : ""} ${on ? "flow" : ""} ${hot ? "hot" : ""} ${branchCls} ${touches ? "touch" : ""} ${faded ? "fade" : ""} ${zoneX ? "xzone" : ""} ${dataCls} ${highlight.has(e.from) && highlight.has(e.to) ? "hl" : ""} ${sel.edge && sel.edge.from === e.from && sel.edge.to === e.to ? "sel" : ""}"><path class="w" d="${d}" ${e.fan ? 'stroke-dasharray="2 6"' : e.mode === "async" ? 'stroke-dasharray="7 5"' : ""}/><path class="hit" d="${d}" data-edge="${e.from}|${e.to}"/>${rec && fl > 0.5 ? `<text class="wlabel" x="${mid.x}" y="${mid.y - 6}" text-anchor="middle">${num(fl)}/s</text>` : vlabel ? `<text class="wlabel wcontract" x="${mid.x}" y="${mid.y - 6}" text-anchor="middle">${esc(vlabel.slice(0, 32))}</text>` : (e.api || e.protocol) ? `<text class="wlabel wcontract" x="${mid.x}" y="${mid.y - 6}" text-anchor="middle">${esc(String(e.api || e.protocol).slice(0, 28))}</text>` : ""}${e.tls === false ? `<text class="wlabel wnotls" x="${mid.x}" y="${mid.y + 12}" text-anchor="middle">no TLS</text>` : ""}</g>`;
       return { touches, markup };
     }).filter(Boolean);
     // Touching wires render last (later in the SVG = on top), so they sit visually above every
@@ -288,7 +354,8 @@
     const edges = edgeList.filter((x) => !x.touches).map((x) => x.markup).join("") + edgeList.filter((x) => x.touches).map((x) => x.markup).join("");
     const nodes = doc.nodes.map((n) => {
       const def = S.BY_ID[n.type], u = nu(n.id), util = u ? u.util : null, isSrc = def.cls === "source";
-      const cls = (util == null || isSrc ? "" : util < 0.7 ? "u-ok" : util <= 1 ? "u-warn" : "u-bad") + (u && u.down ? " down" : "") + (!live.has(n.id) ? " orphan" : "") + (sel.node === n.id ? " sel" : "") + (down[n.id] ? " down" : "");
+      const cls = (util == null || isSrc ? "" : util < 0.7 ? "u-ok" : util <= 1 ? "u-warn" : "u-bad") + (u && u.down ? " down" : "") + (!live.has(n.id) ? " orphan" : "") + (sel.node === n.id ? " sel" : "") + (down[n.id] ? " down" : "") + (multi.has(n.id) ? " msel" : "") + (highlight.has(n.id) ? " hl" : highlight.size ? " vdim" : "") + (vi && vi.dim(n) ? " vdim" : "") + (vi && vi.hot(n) ? " vhot" : "") + (n.props.locked ? " locked" : "");
+      const vb = vi ? vi.badge(n) : "";
       const nm = (n.props.name || def.name), fill = util == null ? 0 : clamp(util, 0, 1) * (NW - 24);
       const aiLevel = Number(n.props.__aiLevel || 1);
       return `<g class="node ${cls} ${aiLevel > 1 ? "ai-level-node" : ""}" data-node="${n.id}" transform="translate(${n.x} ${n.y})">
@@ -299,20 +366,53 @@
         ${aiLevel > 1 ? `<text class="ai-depth" x="${NW / 2 - 9}" y="${-NH / 2 + 14}" text-anchor="end">L${aiLevel}</text>` : ""}
         <text class="sb" x="${-NW / 2 + 10}" y="12">${esc(subLabel(n))}</text>
         ${util != null && !isSrc ? `<rect class="ubg" x="${-NW / 2 + 12}" y="${NH / 2 - 14}" width="${NW - 24}" height="6" rx="3"/><rect class="ufill" x="${-NW / 2 + 12}" y="${NH / 2 - 14}" width="${fill}" height="6" rx="3"/><text class="pc" x="${NW / 2 - 8}" y="12" text-anchor="end">${Math.round(util * 100)}%</text>` : ""}
-        ${u && u.down ? `<text class="pc" x="${NW / 2 - 8}" y="-11" text-anchor="end" fill="var(--bad)">DOWN</text>` : ""}${u && u.brkOpen ? `<text class="pc" x="${NW / 2 - 8}" y="-11" text-anchor="end" fill="var(--bad)">BREAKER OPEN</text>` : ""}${u && u.unhealthy && running && !u.down ? `<text class="pc" x="${NW / 2}" y="${-NH / 2 - 6}" text-anchor="end" fill="var(--bad)">unhealthy</text>` : ""}
-        ${isSrc ? "" : `<circle class="in" cx="${-NW / 2}" cy="0" r="4"/>`}<circle class="handle" data-handle="${n.id}" cx="${NW / 2}" cy="0" r="8"/>
+        ${u && u.down ? `<text class="pc" x="${NW / 2}" y="${-NH / 2 - 6}" text-anchor="end" fill="var(--bad)">DOWN</text>` : ""}${u && u.brkOpen ? `<text class="pc" x="${NW / 2}" y="${-NH / 2 - 6}" text-anchor="end" fill="var(--bad)">BREAKER OPEN</text>` : ""}${u && u.unhealthy && running && !u.down ? `<text class="pc" x="${NW / 2}" y="${-NH / 2 - 6}" text-anchor="end" fill="var(--bad)">unhealthy</text>` : ""}
+        ${isSrc ? "" : `<circle class="in" cx="${-NW / 2}" cy="0" r="4"/>`}<circle class="handle-hit" data-handle="${n.id}" cx="${NW / 2}" cy="0" r="20"/><circle class="handle" data-handle="${n.id}" cx="${NW / 2}" cy="0" r="8"/>
+        ${n.props.locked ? `<text class="nbadge" x="${NW / 2 - 4}" y="${NH / 2 + 4}" text-anchor="end">🔒</text>` : ""}${n.props.comment ? `<text class="nbadge" x="${-NW / 2 + 2}" y="${NH / 2 + 4}"><title>${esc(n.props.comment)}</title>💬</text>` : ""}
+        ${vb ? `<text class="vbadge" x="0" y="${NH / 2 + 16}" text-anchor="middle">${esc(vb)}</text>` : ""}
       </g>`;
     }).join("");
     const bands = usedRegions().map((id) => { const ns = doc.nodes.filter((n) => n.props.region === id); if (!ns.length) return ""; const x0 = Math.min(...ns.map((n) => n.x)) - NW / 2 - 24, x1 = Math.max(...ns.map((n) => n.x)) + NW / 2 + 24, y0 = Math.min(...ns.map((n) => n.y)) - NH / 2 - 34, y1 = Math.max(...ns.map((n) => n.y)) + NH / 2 + 26, col = regionColor(id), down = chaos["region:" + id];
       return `<g><rect x="${x0}" y="${y0}" width="${x1 - x0}" height="${y1 - y0}" rx="22" fill="${down ? "var(--bad)" : col}" opacity="${down ? 0.16 : 0.07}" stroke="${col}" stroke-opacity=".6" stroke-dasharray="8 6"/><text x="${x0 + 14}" y="${y0 + 22}" font-size="14" font-weight="700" fill="${col}">${esc(regionName(id))}${down ? " · DOWN" : ""}</text></g>`; }).join("");
     const rub = rubber ? `<path class="rubber" d="M${rubber.x1} ${rubber.y1} L${rubber.x2} ${rubber.y2}"/>` : "";
+    let vbands = "";
+    if (vi && vi.group) { const keys = [...new Set(doc.nodes.map(vi.group))]; vbands = keys.map((k) => bandSvg(doc.nodes.filter((n) => vi.group(n) === k), k, vi.color(k), { pad: 14, op: 0.08, cls: "vband" })).join(""); }
+    const gbands = (doc.groups || []).map((g) => bandSvg(doc.nodes.filter((n) => g.ids.includes(n.id)), "\u25a3 " + g.name, "var(--accent)", { pad: 30, op: 0.05, cls: "gband", group: g.id })).join("");
+    const mq = marquee ? `<rect class="marquee" x="${Math.min(marquee.x1, marquee.x2)}" y="${Math.min(marquee.y1, marquee.y2)}" width="${Math.abs(marquee.x2 - marquee.x1)}" height="${Math.abs(marquee.y2 - marquee.y1)}"/>` : "";
     board.innerHTML = `<defs><filter id="roughN" x="-15%" y="-25%" width="130%" height="150%"><feTurbulence type="fractalNoise" baseFrequency="0.04" numOctaves="2" seed="9" result="n"/><feDisplacementMap in="SourceGraphic" in2="n" scale="2.6"/></filter>
       <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="context-stroke"/></marker>
       <pattern id="dots" width="28" height="28" patternUnits="userSpaceOnUse" patternTransform="translate(${view.x % (28 * view.z)} ${view.y % (28 * view.z)}) scale(${view.z})"><circle class="grid-dot" cx="2" cy="2" r="1.2"/></pattern></defs>
-      <rect width="100%" height="100%" fill="url(#dots)"/><g id="world" transform="translate(${view.x} ${view.y}) scale(${view.z})">${bands}${edges}${nodes}${rub}</g>`;
-    $("#hint").textContent = doc.nodes.length <= 1 ? "Pick a component on the right to start drawing" : "";
+      <rect width="100%" height="100%" fill="url(#dots)"/><g id="world" transform="translate(${view.x} ${view.y}) scale(${view.z})">${vbands}${gbands}${bands}${edges}${nodes}${rub}${mq}</g>`;
+    $("#hint").textContent = doc.nodes.length <= (guideId ? 0 : 1) ? (practiceMode ? (guideId ? "Follow the guide steps. Step 1: add a Client from the Components panel." : "Rebuild the reference: drag a Client from the Components tab, add the boxes you saw, and connect them in request order. Then press Start.") : aiWorkspace ? "Start here: describe your app in the AI assistant tab and press Generate, or drag components from the Components tab. Then follow the steps on the left." : "Pick a component on the right to start drawing") : "";
     $("#board").setAttribute("class", tool === "hand" || spaceDown ? "pan" : tool === "connect" || linkFrom ? "link" : "");
-    zoomLabel(); paintRegionChaos(); if (!light || tab === "live") updSide();
+    zoomLabel(); paintRegionChaos(); paintWirePanel(); paintMinimap(); paintMultiBar(); if (!light) paintGuide(); if (!light || tab === "live") updSide();
+  }
+  // ---- minimap: every box as a dot, the visible area as a frame; click to jump there
+  function paintMinimap() {
+    const mm = $("#minimap"); if (!mm) return;
+    if (!doc.nodes.length || referenceMode) { mm.setAttribute("hidden", ""); return; }
+    mm.removeAttribute("hidden");
+    const r = $("#board").getBoundingClientRect(), W = 180, H = 116;
+    const vx0 = -view.x / view.z, vy0 = -view.y / view.z, vw = r.width / view.z, vh = r.height / view.z;
+    const xs = doc.nodes.map((n) => n.x), ys = doc.nodes.map((n) => n.y);
+    const x0 = Math.min(...xs, vx0) - NW, x1 = Math.max(...xs, vx0 + vw) + NW, y0 = Math.min(...ys, vy0) - NH, y1 = Math.max(...ys, vy0 + vh) + NH;
+    const k = Math.min(W / (x1 - x0), H / (y1 - y0)), ox = (W - (x1 - x0) * k) / 2, oy = (H - (y1 - y0) * k) / 2;
+    const px = (x) => ox + (x - x0) * k, py = (y) => oy + (y - y0) * k;
+    mm.dataset.map = JSON.stringify({ x0, y0, k, ox, oy });
+    mm.innerHTML = doc.edges.map((e) => { const a = node(e.from), b = node(e.to); return a && b ? `<line x1="${px(a.x)}" y1="${py(a.y)}" x2="${px(b.x)}" y2="${py(b.y)}"/>` : ""; }).join("") +
+      doc.nodes.map((n) => `<rect class="${multi.has(n.id) || sel.node === n.id ? "on" : highlight.has(n.id) ? "hl" : ""}" x="${px(n.x) - NW * k / 2}" y="${py(n.y) - NH * k / 2}" width="${Math.max(2, NW * k)}" height="${Math.max(2, NH * k)}" rx="1.5" style="fill:${STU ? STU.LAYER_COLORS[STU.layerOf(S.BY_ID[n.type])] : "var(--accent)"}"/>`).join("") +
+      `<rect class="vp" x="${px(vx0)}" y="${py(vy0)}" width="${vw * k}" height="${vh * k}"/>`;
+  }
+  // ---- multi-selection toolbar
+  function paintMultiBar() {
+    const bar = $("#multiBar"); if (!bar) return;
+    if (multi.size < 2) { bar.hidden = true; return; }
+    const ids = [...multi], svcs = ids.filter((id) => node(id) && S.BY_ID[node(id).type].cls === "service"), allLocked = ids.every((id) => node(id) && node(id).props.locked);
+    const grp = (doc.groups || []).find((g) => g.ids.length === ids.length && g.ids.every((id) => multi.has(id)));
+    const sig = ids.join(",") + allLocked + (grp ? grp.id : "");
+    if (bar.dataset.sig === sig && !bar.hidden) return;
+    bar.dataset.sig = sig; bar.hidden = false;
+    bar.innerHTML = `<b>${ids.length} selected</b><button data-multi="lock">${allLocked ? "Unlock" : "Lock"}</button><button data-multi="dup">Duplicate</button>${grp ? `<button data-multi="ungroup">Ungroup “${esc(grp.name)}”</button>` : `<button data-multi="group">Group…</button>`}${svcs.length >= 2 ? `<button data-multi="merge" title="Preview merging these services into one modular monolith">Merge ${svcs.length} services…</button>` : ""}<button data-multi="delete" class="danger">Delete</button><button data-multi="clear" aria-label="Clear selection">&times;</button>`;
   }
 
   // ---------------------------------------------------------------- side panel
@@ -357,12 +457,17 @@
     });
     el.replaceChildren(frag);
   }
-  const CAT_ICONS = { "Clients": "👥", "Traffic & edge": "🚦", "Compute": "🖥️", "AI": "🧠", "Storage": "🗄️", "Messaging": "📬", "External": "🔌", "Observability": "📈", "Containers & Kubernetes": "☸️", "Data & analytics": "📊", "AI & ML": "🧠", "Security & identity": "🔐", "DevOps & CI/CD": "🔁", "Networking": "🌐" };
+  const CAT_ICONS = { "Clients": "👥", "Traffic & Edge": "🚦", "Compute": "🖥️", "AI & ML": "🧠", "Storage": "🪣", "Databases": "🗄️", "Cache": "⚡", "Messaging": "📬", "External Integrations": "🔌", "Observability": "📈", "Security & Identity": "🔐", "Containers & Kubernetes": "☸️", "DevOps & CI/CD": "🔁", "Networking": "🌐", "Analytics": "📊" };
+  // Display grouping only: component data keeps its original category, which the checks and cost model read.
+  const CAT_ORDER = Object.keys(CAT_ICONS), CAT_RENAME = { "Traffic & edge": "Traffic & Edge", "Security & identity": "Security & Identity", "External": "External Integrations", "Data & analytics": "Analytics" };
+  const dispCat = (x) => (x.cat === "Storage" ? (x.cls === "db" ? "Databases" : x.cls === "cache" ? "Cache" : "Storage") : CAT_RENAME[x.cat] || x.cat);
+  const displayCats = () => { const used = [...new Set(S.CATALOG.map(dispCat))]; return CAT_ORDER.filter((c) => used.includes(c)).concat(used.filter((c) => !CAT_ORDER.includes(c))); };
   const PROVS = [["all", "All"], ["aws", "AWS"], ["gcp", "Google Cloud"], ["azure", "Azure"], ["k8s", "Kubernetes"], ["docker", "Docker"], ["devops", "DevOps"], ["oss", "Open source"], ["generic", "Basic"]];
   let provFilter = "all";
   const PROV = { aws: ["AWS", "#FF9900", "#1a1200"], gcp: ["GCP", "#4285F4", "#fff"], azure: ["Azure", "#0078D4", "#fff"], k8s: ["K8s", "#326CE5", "#fff"], docker: ["Docker", "#2496ED", "#fff"], devops: ["DevOps", "#7C3AED", "#fff"], oss: ["OSS", "#16a34a", "#fff"] };
   const provPill = (x) => (PROV[x.prov] ? `<em class="prov" style="background:${PROV[x.prov][1]};color:${PROV[x.prov][2]}">${PROV[x.prov][0]}</em>` : "");
   let partsQuery = "";
+  let guide = null; // guided practice state (Learn), set up by initGuide()
   // Each category shows only its first two rows by default -- the catalog has hundreds of entries,
   // and an always-fully-open category pushes everything else below it out of view. "More options"
   // reveals the rest; collapsing back to two rows is remembered per category, same as open/closed.
@@ -372,17 +477,18 @@
                                   // button just appears slightly early rather than content being cut
                                   // off with no way to reach it.
   function renderParts() {
-    const q = partsQuery.toLowerCase(), cats = S.CATS.map((c) => ({ c, items: S.CATALOG.filter((x) => x.cat === c && (provFilter === "all" || x.prov === provFilter) && (!q || x.name.toLowerCase().includes(q) || c.toLowerCase().includes(q) || (x.prov || "").includes(q))) })).filter((g) => g.items.length);
-    $("#tab-parts").innerHTML = `<input class="search" id="q" placeholder="Search ${S.CATALOG.length} components…" value="${esc(partsQuery)}" aria-label="Search components">
-      <div class="pchips">${PROVS.map(([v, t]) => `<button class="pchip ${provFilter === v ? "on" : ""}" data-provf="${v}">${t}</button>`).join("")}</div>
-      <div class="btnrow" style="margin:0 0 8px"><button data-secall="open">Expand all</button><button data-secall="close">Collapse all</button></div>` +
+    const BASIC = skill === "beginner" ? new Set(["client", "mobile", "browser", "dns", "cdn", "limiter", "lb", "apigw", "app", "worker", "auth", "search", "notify", "sql", "postgres", "mongo", "cache", "object", "queue", "kafka", "thirdparty", "payment", "email", "llm", "embed", "vector", "metrics", "logs"].concat(guide ? guide.ref.nodes.map((n) => n.type) : [])) : null;
+    const q = partsQuery.toLowerCase(), cats = displayCats().map((c) => ({ c, items: S.CATALOG.filter((x) => dispCat(x) === c && (!BASIC || BASIC.has(x.id)) && (BASIC || provFilter === "all" || x.prov === provFilter) && (!q || x.name.toLowerCase().includes(q) || c.toLowerCase().includes(q) || (x.prov || "").includes(q))) })).filter((g) => g.items.length);
+    $("#tab-parts").innerHTML = `<div class="parts-tools"><input class="search" id="q" placeholder="Search components" title="Search ${S.CATALOG.length} components" value="${esc(partsQuery)}" aria-label="Search components">
+      <select id="provSel" aria-label="Provider" title="Show one provider's components">${PROVS.map(([v, t]) => `<option value="${v}" ${provFilter === v ? "selected" : ""}>${v === "all" ? "All providers" : t}</option>`).join("")}</select>
+      <button type="button" class="icon-btn" data-secall="open" title="Expand all categories" aria-label="Expand all categories">⊞</button><button type="button" class="icon-btn" data-secall="close" title="Collapse all categories" aria-label="Collapse all categories">⊟</button></div>` +
       cats.map((g) => {
-        const key = "cat:" + slug(g.c), rowsOpen = partsRowsExpanded.has(key) || q || provFilter !== "all";
-        const more = g.items.length > PARTS_ROW_THRESHOLD
+        const key = "cat:" + slug(g.c), rowsOpen = BASIC || partsRowsExpanded.has(key) || q || provFilter !== "all";
+        const more = g.items.length > PARTS_ROW_THRESHOLD && !BASIC
           ? `<button class="parts-more" data-secmore="${key}">${rowsOpen ? "Show fewer options ▴" : `Show ${g.items.length - PARTS_ROW_THRESHOLD} more options ▾`}</button>`
           : "";
-        return `<details class="sec cat" data-sec="${key}" ${q || provFilter !== "all" || secOpen(key, ["Clients", "Traffic & edge", "Compute"].includes(g.c)) ? "open" : ""}><summary>${CAT_ICONS[g.c] || ""} ${esc(g.c)} <span class="count">${g.items.length}</span></summary><div class="parts secbody ${rowsOpen ? "expanded" : ""}">${g.items.map((x) => `<button class="part" style="${PROV[x.prov] ? "border-top:3px solid " + PROV[x.prov][1] : ""}" draggable="true" data-add="${x.id}"><span>${x.icon}</span>${esc(x.name)}${provPill(x)}</button>`).join("")}</div>${more}</details>`;
-      }).join("") || "<p class='muted'>Nothing matches.</p>";
+        return `<details class="sec cat" data-sec="${key}" ${BASIC || q || provFilter !== "all" || secOpen(key, ["Clients", "Traffic & Edge", "Compute"].includes(g.c)) ? "open" : ""}><summary>${CAT_ICONS[g.c] || ""} ${esc(g.c)} <span class="count">${g.items.length}</span></summary><div class="parts secbody ${rowsOpen ? "expanded" : ""}">${g.items.map((x) => `<button class="part" style="${PROV[x.prov] ? "border-top:3px solid " + PROV[x.prov][1] : ""}" draggable="true" data-add="${x.id}"><span>${x.icon}</span>${esc(x.name)}${provPill(x)}</button>`).join("")}</div>${more}</details>`;
+      }).join("") + (BASIC ? `<p class="parts-note">Beginner level: only the ${BASIC.size} basic parts. Intermediate shows all ${S.CATALOG.length}.</p>` : "") || "<p class='muted'>Nothing matches.</p>";
     const q2 = $("#q"); q2.oninput = () => { partsQuery = q2.value; const pos = q2.selectionStart; renderParts(); const n = $("#q"); n.focus(); n.setSelectionRange(pos, pos); };
   }
   // ---- component explanations live in the Selected panel
@@ -391,7 +497,8 @@
     const d = S.BY_ID[id]; if (!d) return "";
     const nums = []; if (d.cap) nums.push(`${num(d.cap)} req/s per instance`); if (d.rd) nums.push(`${num(d.rd)} reads/s · ${num(d.wr)} writes/s`); if (d.ms > 1) nums.push(`~${d.ms} ms`); if (d.msR) nums.push(`~${d.msR} ms read`); if (d.cost) nums.push(`$${num(d.cost)}/month`);
     const pv = PROV[d.prov] ? `<em class="prov" style="background:${PROV[d.prov][1]};color:${PROV[d.prov][2]}">${PROV[d.prov][0]}</em>` : "";
-    return `<div class="tt-h"><span>${d.icon}</span><b>${esc(d.name)}</b>${pv}</div><div class="tt-k">${esc(DOCS.CLS[d.cls] || d.cls)}${DOCS.PROV[d.prov] && d.prov !== "generic" ? " · " + esc(DOCS.PROV[d.prov]) : ""}</div><p>${esc(DOCS.D[id] || "")}</p>${nums.length ? `<div class="tt-n">${nums.join(" · ")}</div>` : ""}<div class="tt-n muted">Teaching numbers; replace them with yours in the Selected tab.</div>${altTipHtml(id)}`;
+    const pf = STU && STU.profile(d), prof = pf ? `<div class="tt-prof"><span><b>Layer</b> ${esc(pf.layer)}</span><span><b>Complexity</b> ${esc(pf.complexity)}</span><span><b>Cost</b> ${esc(pf.costCategory)}</span></div>${pf.limitations.length ? `<div class="tt-lim"><b>Limitations</b> ${esc(pf.limitations.join(" "))}</div>` : ""}${pf.security.length ? `<div class="tt-sec"><b>Security</b> ${esc(pf.security.join("; "))}</div>` : ""}` : "";
+    return `<div class="tt-h"><span>${d.icon}</span><b>${esc(d.name)}</b>${pv}</div><div class="tt-k">${esc(DOCS.CLS[d.cls] || d.cls)}${DOCS.PROV[d.prov] && d.prov !== "generic" ? " · " + esc(DOCS.PROV[d.prov]) : ""}</div><p>${esc(DOCS.D[id] || "")}</p>${prof}${nums.length ? `<div class="tt-n">${nums.join(" · ")}</div>` : ""}<div class="tt-n muted">Teaching numbers; replace them with yours in the Selected tab.</div>${altTipHtml(id)}`;
   }
   const ALTS = window.LabAlts || { info: () => null };
   const altName = (id) => (S.BY_ID[id] ? S.BY_ID[id].name : id);
@@ -488,6 +595,58 @@
     const resilience = ["service", "proxy"].includes(d.cls) ? `Timeout ${p.timeout || 1000}ms; retries ${p.retries || 0}; ${p.breaker ? "circuit breaker protects a failing dependency" : "add a circuit breaker for downstream failure"}.` : d.cls === "db" ? "Backups, restore drills, encryption, and a tested failover path are required." : d.cls === "queue" ? "Use idempotency keys, bounded retries, and a dead-letter queue for poison messages." : "Define ownership, health checks, and monitoring before production.";
     return `<article class="deep-design"><span class="architect-kicker">LEVEL 2 · DEEP DESIGN</span><h3>${d.icon} ${esc(p.name || d.name)}</h3><p>${esc(role)}</p>${deepCanvasHtml(n)}${contractCanvasHtml(n)}<div class="deep-design-grid"><div><b>Inputs</b><span>${esc(incoming.join(" · ") || "Entry point")}</span></div><div><b>Outputs</b><span>${esc(outgoing.join(" · ") || "No downstream component yet")}</span></div><div><b>Scale plan</b><span>${esc(scale)}</span></div><div><b>Failure plan</b><span>${esc(resilience)}</span></div></div><p class="deep-design-note">Click an internal canvas box to open its implementation canvas on the right.</p></article>`;
   }
+  const WIRE_PROTOCOLS = ["", "HTTPS / REST", "gRPC", "GraphQL", "WebSocket", "SQL", "Queue message", "Event (pub/sub)", "Stream (Kafka-style)", "File / object", "Other"];
+  const WIRE_CLASS = [["", "Not classified"], ["public", "Public"], ["internal", "Internal"], ["confidential", "Confidential (personal / business)"], ["restricted", "Restricted (payments, health, secrets)"]];
+  const WIRE_RETRY = [["", "Not set"], ["none", "No retries"], ["backoff", "3 retries, exponential backoff + jitter"], ["dlq", "Retry, then dead-letter queue"], ["idempotent", "Retries with idempotency key"]];
+  const sel3 = (k, list, v) => `<select data-es="${k}">${list.map((x) => { const [val, lab] = Array.isArray(x) ? x : [x, x || "Not set"]; return `<option value="${esc(val)}" ${(v || "") === val ? "selected" : ""}>${esc(lab)}</option>`; }).join("")}</select>`;
+  function wireFields(e) {
+    return fld("Protocol", sel3("protocol", WIRE_PROTOCOLS, e.protocol)) +
+      fld("API or event name", `<input type="text" data-es="api" value="${esc(e.api || "")}" maxlength="80" placeholder="POST /orders · order.created">`) +
+      fld("Payload", `<input type="text" data-es="payload" value="${esc(e.payload || "")}" maxlength="120" placeholder="orderId, items, total">`) +
+      fld("Call style", sel3("mode", [["", "Synchronous (waits for an answer)"], ["async", "Asynchronous (fire and forget / event)"]], e.mode), "Async wires do not count as dependency cycles") +
+      fld("Timeout (ms)", `<input type="number" data-e="timeout" value="${e.timeout || ""}" min="0" step="50" placeholder="e.g. 800">`) +
+      fld("Retry policy", sel3("retry", WIRE_RETRY, e.retry)) +
+      fld("Data classification", sel3("classification", WIRE_CLASS, e.classification), "Restricted or confidential data needs TLS and access logging") +
+      fld("Encrypted in transit (TLS)", tog("tls", e.tls !== false)) +
+      fld("Parallel call", tog("fan", e.fan), "Also called on every request (for example a vector search next to the main path)") + fld(e.fan ? "Share of requests" : "Traffic weight", `<input type="number" data-e="w" value="${e.w || 1}" min="0" max="${e.fan ? 1 : 100}" step="${e.fan ? 0.1 : 1}">`, e.fan ? "0 to 1" : "Splits traffic between several targets") +
+      fld("Carries", `<select data-es="only">${[["", "Everything"], ["r", "Reads only"], ["w", "Writes only"], ["s", "Static files only"]].map(([v, t]) => `<option value="${v}" ${(e.only || "") === v ? "selected" : ""}>${t}</option>`).join("")}</select>`, "Send reads to a local replica and writes to the primary") + fld("Failover only", tog("failover", e.failover), "A backup path: used only when the other targets are unhealthy") +
+      `<div class="btnrow"><button class="danger" data-act="delEdge">Remove wire</button></div>`;
+  }
+  // Real Play hides the side inspector, so a selected wire gets a small floating panel on the canvas.
+  let wirePanelKey = "", rpBefore = null;
+  // Narrow guided practice: the side panel floats over the canvas and is shown only when it is needed.
+  const narrowGuide = () => !!guide && matchMedia("(min-width: 761px) and (max-width: 900px)").matches;
+  function setRightTab(name, byUser) {
+    const col = $("#rightCol"); if (!col) return;
+    col.dataset.tab = name; if (byUser) rpBefore = null;
+    $$("#rightCol [data-rp]").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.rp === name)));
+    if (byUser) { document.body.classList.remove("rp-collapsed"); try { localStorage.setItem("archlab.rp", name); } catch (e) { /* ignore */ } }
+  }
+  // Selecting something shows the Inspect tab; clearing the selection returns to the tab you were on.
+  function inspectShown(show) {
+    const col = $("#rightCol"); if (!col) return;
+    if (show && guide && col.dataset.tab === "parts") { const i = guideStatus().done.indexOf(false); if (i >= 0 && /^(add|connect)$/.test(guide.steps[i].kind)) return; }   // keep Components open while the guide is still building
+    if (narrowGuide()) document.body.classList.toggle("rp-collapsed", !show);
+    if (show && col.dataset.tab !== "inspect") { rpBefore = col.dataset.tab; setRightTab("inspect"); }
+    else if (!show && col.dataset.tab === "inspect" && rpBefore) { setRightTab(rpBefore); rpBefore = null; }
+  }
+  function paintWirePanel() {
+    const stage = $("#stage"); if (!stage || !aiWorkspace) return;
+    let panel = $("#wirePanel");
+    if (!panel) { panel = document.createElement("section"); panel.id = "wirePanel"; panel.className = "wire-panel"; panel.hidden = true; ($("#rpInspect") || stage).appendChild(panel); }
+    const e = sel.edge && doc.edges.find((x) => x.from === sel.edge.from && x.to === sel.edge.to);
+    if (!e && sel.node && node(sel.node)) {
+      const n = node(sel.node), key = "n:" + n.id + ":" + JSON.stringify(n.props) + ":" + doc.edges.length + ":" + (costLast || 0) + ":" + (lastRec && lastRec.nodes[n.id] ? Math.round(lastRec.nodes[n.id].util * 10) : "") + ":" + skill;
+      if (key === wirePanelKey && !panel.hidden) return;
+      if (!panel.hidden && panel.contains(document.activeElement) && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName) && wirePanelKey.startsWith("n:" + n.id + ":")) { const ld = panel.querySelector(".set-load"); if (ld) ld.outerHTML = loadNote(n) || "<span class='set-load'></span>"; return; }   // don't rebuild under the user's cursor
+      wirePanelKey = key; panel.hidden = false; panel.innerHTML = explainHtml(n); inspectShown(true); return;
+    }
+    if (!e || !node(e.from) || !node(e.to)) { if (!panel.hidden) inspectShown(false); panel.hidden = true; wirePanelKey = ""; return; }
+    const key = JSON.stringify(e); if (key === wirePanelKey && !panel.hidden) return;
+    wirePanelKey = key; panel.hidden = false; inspectShown(true);
+    const nm = (id) => esc(node(id).props.name || S.BY_ID[node(id).type].name);
+    panel.innerHTML = `<header><b>Wire</b><span>${nm(e.from)} → ${nm(e.to)}</span><button type="button" id="wirePanelClose" aria-label="Close wire panel">&times;</button></header><div class="wire-panel-body">${wireFields(e)}</div>`;
+  }
   function renderInspect() { renderInspect0(); collapsifyDom($("#tab-inspect"), "inspect"); }
   function renderInspect0() {
     const el = $("#tab-inspect");
@@ -496,10 +655,7 @@
     if (third) third.innerHTML = aiWorkspace ? (selectedNode ? thirdLevelCanvasHtml(selectedNode) : `<section class="third-canvas third-empty"><b>Level 3 · Implementation canvas</b><span>Select a Level 1 component, then select a Level 2 box. Its API, transaction, data, and delivery path will appear here.</span></section>`) : "";
     if (sel.edge) {
       const e = doc.edges.find((x) => x.from === sel.edge.from && x.to === sel.edge.to); if (!e) { el.innerHTML = "<p class='muted'>Nothing selected.</p>"; return; }
-      el.innerHTML = `<h3>Wire</h3><p class="muted">${esc(node(e.from).props.name || S.BY_ID[node(e.from).type].name)} → ${esc(node(e.to).props.name || S.BY_ID[node(e.to).type].name)}</p>` +
-        fld("Parallel call", tog("fan", e.fan), "Also called on every request (for example a vector search next to the main path)") + fld(e.fan ? "Share of requests" : "Traffic weight", `<input type="number" data-e="w" value="${e.w || 1}" min="0" max="${e.fan ? 1 : 100}" step="${e.fan ? 0.1 : 1}">`, e.fan ? "0 to 1" : "Splits traffic between several targets") +
-        fld("Carries", `<select data-es="only">${[["", "Everything"], ["r", "Reads only"], ["w", "Writes only"], ["s", "Static files only"]].map(([v, t]) => `<option value="${v}" ${(e.only || "") === v ? "selected" : ""}>${t}</option>`).join("")}</select>`, "Send reads to a local replica and writes to the primary") + fld("Failover only", tog("failover", e.failover), "A backup path: used only when the other targets are unhealthy") +
-        `<div class="btnrow"><button class="danger" data-act="delEdge">Remove wire</button></div>`; return;
+      el.innerHTML = `<h3>Wire</h3><p class="muted">${esc(node(e.from).props.name || S.BY_ID[node(e.from).type].name)} → ${esc(node(e.to).props.name || S.BY_ID[node(e.to).type].name)}</p>` + wireFields(e); return;
     }
     const n = selectedNode; if (!n) {
       const preview = hoverNodeId && node(hoverNodeId);
@@ -543,6 +699,7 @@
         nums.map(([k, l, dv]) => fld(l, `<input type="number" data-p="${k}" placeholder="${dv}" value="${p[k] == null ? "" : p[k]}" step="any"><label style="font-size:11px"><input type="checkbox" data-meas="${k}" ${p.measured && p.measured[k] ? "checked" : ""}> measured</label>`)).join("");
     }
     h += altPanelHtml(n.type);
+    h += fld("Locked", tog("locked", p.locked), "Locked boxes cannot be moved or deleted (L)") + fld("Comment", `<textarea data-pc="comment" rows="2" maxlength="500" placeholder="Decision, open question or TODO">${esc(p.comment || "")}</textarea>`);
     h += `<div class="btnrow"><button data-act="dup">Duplicate</button><button class="danger" data-act="delNode">Delete</button></div>`; el.innerHTML = h;
   }
   function renderScenario() { renderScenario0(); collapsifyDom($("#tab-scenario"), "traffic"); }
@@ -615,29 +772,40 @@
     }).sort((a, b) => b.peak_util_pct - a.peak_util_pct).slice(0, 14);
     return { p95_ms: Math.round(s.p95), availability_pct: +(s.availability * 100).toFixed(3), monthly_cost: Math.round(s.cost), nodes: comps };
   }
+  function settingsText(n) {
+    const d = S.BY_ID[n.type] || {}, p = n.props, c = d.cls, on = (v) => (v ? "on" : "off"), out = [];
+    if (["router", "proxy", "service"].includes(c)) out.push(`instances ${p.inst || 1}`);
+    if (["proxy", "service"].includes(c)) out.push(`autoscaling ${on(p.auto)}`, `circuit breaker ${on(p.breaker)}`, `retries ${p.retries || 0}`);
+    if (c === "router") out.push(`high availability ${on(p.ha)}`);
+    if (c === "cache") out.push(`nodes ${p.inst || 1}`, `hit rate ${Math.round(100 * (p.hit == null ? d.hit || 0 : p.hit))}%`);
+    if (c === "queue") out.push(`workers ${p.workers || 1}`);
+    if (c === "db") out.push(`read replicas ${p.replicas || 0}`, `automatic failover ${on(p.ha)}`, `shards ${p.shards || 1}`);
+    return out.join(", ") || subLabel(n);
+  }
   function reviewFacts() {
     const sc = doc.scenario, o = doc.slo, ev = events();
     const label = (n) => n.props.name || S.BY_ID[n.type].name;
     return { name: doc.name || "Untitled", goals: { p95_ms: o.p95, availability_pct: o.avail, budget_per_month: o.budget },
       scenario: { baseline_rps: sc.base, shape: sc.shape, read_pct: Math.round(sc.readFrac * 100), static_pct: Math.round(sc.staticFrac * 100), bot_pct: Math.round(sc.botFrac * 100) },
-      design: doc.nodes.filter((n) => S.BY_ID[n.type].cls !== "source").map((n) => `${label(n)} (${S.BY_ID[n.type].name}): ${subLabel(n)}`),
+      design: doc.nodes.filter((n) => S.BY_ID[n.type].cls !== "source").map((n) => `${label(n)} (${S.BY_ID[n.type].name}): ${settingsText(n)}`),
       wires: doc.edges.map((e) => `${label(node(e.from))} -> ${label(node(e.to))}${e.fan ? " (parallel call)" : ""}`),
       normal: runFacts([]), incident: ev.length ? runFacts(ev) : null, incidents: ev.map((x) => x.type),
       mission: (activeMission() && mresult && !mresult.error) ? { title: activeMission().title, score: mresult.score, failed: mresult.criteria.filter((c) => !c.pass).map((c) => `${c.label} (${c.detail})`), incidents: activeMission().incidents.map((i) => `${i.label}: ${pctS(mresult.R.win[i.id].availability)} served`) } : null,
       notes: findings().map((f) => f[1]) };
   }
-  function renderReviewSurface() { if (tab === "architect") renderArchitect(); else renderLive(); }
+  function renderReviewSurface() { renderArchitect(); if (tab === "live") renderLive(); }
   async function aiReview() {
     if (reviewBusy) return; reviewBusy = true; reviewText = "Reviewing this architecture with the local mentor (about 20 to 60 seconds)…"; renderReviewSurface();
-    try { const r = await memoryApi("/api/architecture-lab/review", { facts: reviewFacts() }); reviewText = r.review; }
+    try { const r = await memoryApi("/api/architecture-lab/review", { facts: reviewFacts(), level: skill || "" }); reviewText = r.review; noteGuide("reviewed"); }
     catch (err) { reviewText = "The mentor review could not run: " + err.message; }
     reviewBusy = false; renderReviewSurface();
   }
   window.addEventListener("message", (event) => {
     if (!event.data || event.data.type !== "archlab-review" || referenceMode) return;
-    tab = "architect"; updSide(); aiReview();
+    sel = { node: null, edge: null }; render(); tab = "architect"; updSide(); setRightTab("ai", true); aiReview();
   });
   // ---- AI Architect: a product brief becomes a reviewable starter canvas.
+  let architectApplied = false;
   let architectBusy = false, architectResult = null, architectDraft = "", architectScale = "starter", architectStack = "recommend", architectMode = "ai";
   let architectPrefs = { style: "modular-monolith", frontends: 1, backends: 3, cloud: "aws", cicd: "github-actions", auth: "oidc", audit: "yes", observability: "yes", transaction: "outbox-saga", queue: "kafka" };
   const ARCHITECT_SCALES = { starter: "Pilot · up to 10k users", growth: "Growth · 10k to 1M users", scale: "Scale · 1M+ users" };
@@ -682,8 +850,8 @@
       ${patterns ? `<details class="architect-patterns"><summary>Patterns used <span>${(b.patterns || []).length}</span></summary><ul>${patterns}</ul></details>` : ""}
       <details class="architect-details" open><summary>Assumptions to validate <span>${architectResult.assumptions.length}</span></summary><ul>${architectResult.assumptions.map((x) => `<li>${esc(x)}</li>`).join("") || "<li>Confirm the product requirements before build.</li>"}</ul></details>
       <details class="architect-details risk"><summary>Risks before production <span>${architectResult.risks.length}</span></summary><ul>${architectResult.risks.map((x) => `<li>${esc(x)}</li>`).join("") || "<li>Run traffic and failure simulations before launch.</li>"}</ul></details>
-      <div class="architect-actions"><button class="primary-sm architect-apply" data-act="applyArchitect">Reapply to canvas</button><button data-act="editArchitect">Edit brief</button></div>
-      <p class="architect-replace">Already loaded onto the canvas on the left. Edited the canvas since? Use “Reapply to canvas” to reload this version.</p>
+      <div class="architect-actions"><button class="primary-sm architect-apply" data-act="applyArchitect">${architectApplied ? "Preview again" : "Review and apply"}</button><button data-act="editArchitect">Edit brief</button></div>
+      <p class="architect-replace">${architectApplied ? "Applied to the canvas. If you edit the canvas and want this version back, preview it again: nothing changes until you approve." : "Not applied yet. Your canvas stays as it is until you review the changes, cost and risks and press Apply."}</p>
     </article>`;
   }
   function mentorMarkup() {
@@ -691,9 +859,13 @@
   }
   function renderArchitect() {
     const el = $("#tab-architect");
+    if (guide) {   // guided practice: the AI tab is only the mentor review, not the product-brief generator
+      el.innerHTML = `<section class="architect-mentor"><div><span class="architect-kicker">MENTOR REVIEW</span><h3>What is good, what to improve</h3><p>The local mentor reads your canvas and its simulation numbers. It takes 20 to 60 seconds.</p></div><button class="architect-mentor-btn" data-act="mentorReview" ${reviewBusy ? "disabled" : ""}>${reviewBusy ? "Reviewing design…" : "✦ Review my design"}</button>${reviewText ? `<div class="architect-mentor-answer">${mdLite(reviewText)}</div>` : ""}</section>`;
+      return;
+    }
     const progress = architectBusy ? `<div class="architect-progress"><i></i><span>Turning your brief into a validated starter architecture…</span></div>` : "";
     const error = architectResult && architectResult.error ? `<div class="architect-error">${esc(architectResult.error)}</div>` : "";
-    el.innerHTML = `<div class="architect-hero"><span class="architect-kicker">LOCAL AI WORKSPACE</span><h2>Turn a product idea into a reviewable system design.</h2><p>Set the product intent, let local AI draft the system, then inspect every service, flow, risk, and delivery gate on the canvas.</p><ol class="architect-steps"><li class="active"><b>1</b><span>Frame</span></li><li><b>2</b><span>Generate</span></li><li><b>3</b><span>Inspect</span></li><li><b>4</b><span>Freeze</span></li></ol></div>${mentorMarkup()}
+    el.innerHTML = `<div class="architect-hero"><span class="architect-kicker">LOCAL AI WORKSPACE</span><h2>Turn a product idea into a reviewable system design.</h2><p>Set the product intent, let local AI draft the system, then inspect every service, flow, risk, and delivery gate on the canvas.</p><ol class="architect-steps"><li class="active"><b>1</b><span>Frame</span></li><li><b>2</b><span>Generate</span></li><li><b>3</b><span>Inspect</span></li><li><b>4</b><span>Freeze</span></li></ol></div>
       <section class="architect-brief"><div class="architect-section-head"><div><span class="architect-step-label">STEP 1</span><h3>Frame the product</h3><p>Who uses it, what they do, and the scale you expect.</p></div><span class="architect-private">◉ Local only</span></div>
         <label class="architect-label" for="architectPrompt">Describe the app</label><textarea id="architectPrompt" data-architect-input rows="7" placeholder="Example: Candidates upload a resume, search worldwide jobs, and receive a ranked daily shortlist. Recruiters post jobs. Start with 10,000 users and daily imports.">${esc(architectDraft)}</textarea>
         <div class="architect-guidance"><span>Include: users</span><span>main action</span><span>expected scale</span></div>
@@ -720,7 +892,7 @@
         </section>
         <div class="architect-generate-wrap"><div><span class="architect-step-label">STEP 2</span><b>Generate the system canvas</b><small>Creates a starter design locally. You stay in control of every choice.</small></div><button class="architect-generate" data-act="runArchitect" ${architectBusy ? "disabled" : ""}><span>✦</span>${architectBusy ? "Designing the complete system…" : "Generate complete system design"}</button></div>${progress}
       </section>
-      <section class="architect-contract"><b>What you will get</b><span>Validated components</span><span>End-to-end flows</span><span>Transaction strategy</span><span>Patterns & risks</span><span>Scale & reliability plan</span><span>Build & deploy handoff</span></section><button class="architect-improve" data-act="openDelivery">Open build &amp; deploy workspace</button>${error}${architectProposal()}`;
+      <section class="architect-contract"><b>What you will get</b><span>Validated components</span><span>End-to-end flows</span><span>Transaction strategy</span><span>Patterns & risks</span><span>Scale & reliability plan</span><span>Build & deploy handoff</span></section><button class="architect-improve" data-act="openDelivery">Open build &amp; deploy workspace</button>${error}${architectProposal()}${mentorMarkup()}`;
   }
   function deliveryChecks() {
     const types = doc.nodes.map((n) => (S.BY_ID[n.type] || {}).name || n.type).join(" ").toLowerCase();
@@ -772,7 +944,7 @@
     architectBusy = true; architectResult = null; renderArchitect(); renderInspect(); $("#stage").classList.add("ai-generating");
     try {
       architectResult = await memoryApi("/api/architecture-lab/architect", { description });
-      if (!architectResult.error) { useDocument(architectResult.document); sel = { node: null, edge: null }; deepPart = ""; levelPath = [{ level: 1, key: "1", node: null }]; levelCache.clear(); tab = "inspect"; updSide(); say("AI architecture generated. Click a box to open its internal design; click a box there for its implementation."); }
+      if (!architectResult.error) { architectApplied = false; previewArchitect(); }
     } catch (err) { architectResult = { error: err.message }; }
     architectBusy = false;
     $("#stage").classList.remove("ai-generating");
@@ -1089,10 +1261,18 @@
   }
   function kpis() {
     const el = $("#kpis"), rec = lastRec, o = doc.slo;
-    if (!rec) { el.innerHTML = `<div class="kpi"><b>—</b><span>requests/s</span></div><div class="kpi"><b>—</b><span>p95 latency</span></div><div class="kpi"><b>—</b><span>availability</span></div><div class="kpi"><b>—</b><span>cost / month</span></div>`; return; }
+    if (!rec) { el.innerHTML = document.body.classList.contains("studio-shell") ? `<span class="kpi-idle" title="Press Start to see live requests, latency, availability and cost.">Press Start to see live numbers.</span>` : `<div class="kpi"><b>—</b><span>requests/s</span></div><div class="kpi"><b>—</b><span>p95 latency</span></div><div class="kpi"><b>—</b><span>availability</span></div><div class="kpi"><b>—</b><span>cost / month</span></div>`; return; }
     const sm = S.summarize(sim), okAv = sm.availability * 100 >= o.avail;
+    const of = (c) => Object.entries(rec.nodes).filter(([id]) => node(id) && S.BY_ID[node(id).type].cls === c).map(([, v]) => v);
+    const qs = of("queue"), dbs = of("db"), caches = of("cache"), ai = STU ? STU.aiTokenCost(doc, mult) : null;
     el.innerHTML = `<div class="kpi"><b>${num(rec.rps)}</b><span>requests/s</span></div><div class="kpi ${rec.p95 <= o.p95 ? "ok" : "bad"}"><b>${Math.round(rec.p95)} ms</b><span>p95 now</span></div>` +
-      `<div class="kpi ${okAv ? "ok" : "bad"}"><b>${(sm.availability * 100).toFixed(2)}%</b><span>availability so far</span></div><div class="kpi ${rec.cost <= o.budget ? "ok" : "bad"}"><b>${money(rec.cost)}</b><span>cost / month</span></div>`;
+      `<div class="kpi ${rec.err * 100 <= 100 - o.avail ? "ok" : "bad"}"><b>${(rec.err * 100).toFixed(2)}%</b><span>errors now</span></div>` +
+      `<div class="kpi ${okAv ? "ok" : "bad"}"><b>${(sm.availability * 100).toFixed(2)}%</b><span>availability so far</span></div>` +
+      (qs.length ? `<div class="kpi ${rec.delayMin > 1 ? "bad" : ""}"><b>${num(Math.max(...qs.map((v) => v.backlog || 0)))}</b><span>queue depth</span></div>` : "") +
+      (dbs.length ? `<div class="kpi ${Math.max(...dbs.map((v) => v.util)) > 1 ? "bad" : ""}"><b>${Math.round(Math.max(...dbs.map((v) => v.util)) * 100)}%</b><span>DB load</span></div>` : "") +
+      (caches.length ? `<div class="kpi"><b>${Math.round(caches.reduce((a, v) => a + v.hit, 0) / caches.length * 100)}%</b><span>cache hits</span></div>` : "") +
+      `<div class="kpi ${rec.cost + (ai ? ai.monthly : 0) <= o.budget ? "ok" : "bad"}"><b>${money(rec.cost)}</b><span>cloud / month</span></div>` +
+      (ai && ai.monthly ? `<div class="kpi" title="${esc(ai.assumptions.join("; "))}"><b>${money(ai.monthly)}</b><span>AI tokens / month</span></div>` : "");
   }
   function zoomLabel() { $("#zoomReset").textContent = Math.round(view.z * 100) + "%"; }
 
@@ -1112,14 +1292,46 @@
   }
   function say(t) { toast = t; showBanner(t, "warn"); setTimeout(() => { if (toast === t) { toast = ""; if (!running) showBanner(""); } }, 2600); }
   function delSel() {
-    if (sel.node) { doc.nodes = doc.nodes.filter((n) => n.id !== sel.node); doc.edges = doc.edges.filter((e) => e.from !== sel.node && e.to !== sel.node); sel = { node: null, edge: null }; commit(); }
+    if (multi.size > 1) return deleteIds([...multi]);
+    if (sel.node) { if (node(sel.node) && node(sel.node).props.locked) return say("Locked: unlock it before deleting it."); deleteIds([sel.node]); }
     else if (sel.edge) { doc.edges = doc.edges.filter((e) => !(e.from === sel.edge.from && e.to === sel.edge.to)); sel = { node: null, edge: null }; commit(); }
+  }
+  const selectionIds = () => (multi.size ? [...multi] : sel.node ? [sel.node] : []);
+  function deleteIds(ids) {
+    const kill = new Set(ids.filter((id) => node(id) && !node(id).props.locked));
+    if (!kill.size) return say("Locked boxes cannot be deleted. Unlock them first.");
+    doc.nodes = doc.nodes.filter((n) => !kill.has(n.id)); doc.edges = doc.edges.filter((e) => !kill.has(e.from) && !kill.has(e.to));
+    if (doc.groups) doc.groups = doc.groups.map((g) => Object.assign({}, g, { ids: g.ids.filter((id) => !kill.has(id)) })).filter((g) => g.ids.length > 1);
+    multi.clear(); sel = { node: null, edge: null }; commit();
+    if (kill.size < ids.length) say(`${ids.length - kill.size} locked box${ids.length - kill.size === 1 ? " was" : "es were"} kept.`);
+  }
+  function duplicateIds(ids) {
+    const map = {};
+    ids.forEach((id) => { const n = node(id); if (!n) return; const c = JSON.parse(JSON.stringify(n)); c.id = uid(); c.x += 40; c.y += 50; delete c.props.locked; if (ids.length === 1) c.props.name = (n.props.name || S.BY_ID[n.type].name) + " copy"; map[id] = c.id; doc.nodes.push(c); });
+    doc.edges.filter((e) => map[e.from] && map[e.to]).forEach((e) => doc.edges.push(Object.assign({}, e, { from: map[e.from], to: map[e.to] })));   // wires inside the selection come along
+    const made = Object.values(map); multi = new Set(made.length > 1 ? made : []); sel = { node: made.length === 1 ? made[0] : null, edge: null }; commit();
+  }
+  function toggleLock(ids) {
+    if (!ids.length) return say("Select a box first.");
+    const lock = !ids.every((id) => node(id) && node(id).props.locked);
+    ids.forEach((id) => { const n = node(id); if (n) { if (lock) n.props.locked = true; else delete n.props.locked; } });
+    commit(false); say(lock ? `Locked ${ids.length} box${ids.length === 1 ? "" : "es"}: they cannot be moved or deleted until unlocked.` : "Unlocked.");
+  }
+  function multiAction(a) {
+    const ids = [...multi];
+    if (a === "clear") { multi.clear(); return render(); }
+    if (a === "delete") return deleteIds(ids);
+    if (a === "dup") return duplicateIds(ids);
+    if (a === "lock") return toggleLock(ids);
+    if (a === "group") { const name = (window.prompt("Name this group (for example: Checkout domain)", "Group " + ((doc.groups || []).length + 1)) || "").trim().slice(0, 40); if (!name) return; doc.groups = (doc.groups || []).filter((g) => !g.ids.some((id) => multi.has(id))).concat([{ id: "g" + Date.now().toString(36), name, ids }]); commit(false); return say(`Grouped ${ids.length} boxes as ${name}. Click the group label to select them together.`); }
+    if (a === "ungroup") { doc.groups = (doc.groups || []).filter((g) => !(g.ids.length === ids.length && g.ids.every((id) => multi.has(id)))); commit(false); return say("Group removed; the boxes stay."); }
+    if (a === "merge" && STU) { const svcs = ids.filter((id) => S.BY_ID[node(id).type].cls === "service"); fixPreview("Merge into a modular monolith", STU.mergeServices(doc, svcs), "Fewer deployables for a small team: one pipeline, in-process calls between modules, one place to scale. Split a module out again only on a measured trigger."); }
   }
   function resetSimple() { loadPreset(PRESETS.find((p) => p.id === "start")); say("Canvas reset to the simple starter."); }
   function clearCanvas() {
     const blank = fresh(PRESETS.find((p) => p.id === "start"));
     blank.name = "Untitled design"; blank.nodes = []; blank.edges = []; delete blank.blueprint;
-    useDocument(blank); say("All components were cleared. Add components from the palette to begin.");
+    useDocument(blank, true); say("All components were cleared. Undo (Ctrl+Z) brings them back.");
   }
   function fitView() {
     if (!doc.nodes.length) return; const r = $("#board").getBoundingClientRect(); const xs = doc.nodes.map((n) => n.x), ys = doc.nodes.map((n) => n.y);
@@ -1128,8 +1340,16 @@
     // fit the diagram into is that much shorter than the board itself -- using the full board
     // height here under-zoomed just enough that tall diagrams ran past the bottom edge.
     const fitHeight = referenceMode ? r.height - 42 : r.height;
-    view.z = clamp(Math.min(r.width / (maxX - minX), fitHeight / (maxY - minY)), 0.3, 1.4);
-    view.x = (r.width - (maxX + minX) * view.z) / 2;
+    const rail = $("#studioRail"), inset = !referenceMode && rail && rail.offsetWidth && rail.closest("#stage") ? rail.offsetWidth + 16 : 0, fitWidth = r.width - inset;
+    if (document.body.classList.contains("studio-shell")) {
+      // room for the level label and minimap on top and the floating toolbar at the bottom
+      const top = 64, fitH = Math.max(120, r.height - top - (document.body.classList.contains("has-guide") ? 140 : 84)), fitW = Math.max(120, r.width - 48);   // guide: also keep clear of the warning banner above the toolbar
+      view.z = clamp(Math.min(fitW / (maxX - minX), fitH / (maxY - minY)), 0.3, 1.2);
+      view.x = (r.width - (maxX + minX) * view.z) / 2; view.y = top + (fitH - (maxY + minY) * view.z) / 2;
+      return render();
+    }
+    view.z = clamp(Math.min(fitWidth / (maxX - minX), fitHeight / (maxY - minY)), 0.3, 1.4);
+    view.x = inset + (fitWidth - (maxX + minX) * view.z) / 2;
     // The reference board is deliberately compact: place its diagram just below its label.
     // Other canvases retain space for the floating editing toolbar.
     if (referenceMode) {
@@ -1140,12 +1360,12 @@
     }
     render();
   }
-  function loadPreset(p) { doc = fresh(p); levelPath = [{ level: 1, key: "1", node: null }]; levelCache.clear(); chaosCache = null; $("#title").value = doc.name; sel = { node: null, edge: null }; sim = null; running = false; clearInterval(timer); lastRec = null; chaos = {}; down = {}; hist = []; histAt = -1; snapshot(); persist(); paintButtons(); showBanner(""); render(); fitView(); kpis(); paintChaos(); }
-  function useDocument(next) {
+  function loadPreset(p) { doc = fresh(skill === "beginner" && p.coreBuild ? { build: p.coreBuild } : p); levelPath = [{ level: 1, key: "1", node: null }]; levelCache.clear(); chaosCache = null; $("#title").value = doc.name; sel = { node: null, edge: null }; sim = null; running = false; clearInterval(timer); lastRec = null; chaos = {}; down = {}; snapshot(); persist(); paintButtons(); showBanner(""); render(); fitView(); kpis(); paintChaos(); }   // history kept: Undo returns to the previous design
+  function useDocument(next, keepHistory) {
     if (!next || !Array.isArray(next.nodes) || !Array.isArray(next.edges)) throw new Error("That saved project is not a valid Architecture Lab design.");
-    doc = next; levelPath = [{ level: 1, key: "1", node: null }]; levelCache.clear(); chaosCache = null; doc.scenario = Object.assign({}, S.DEFAULT_SCENARIO, doc.scenario || {}); doc.slo = doc.slo || { p95: 200, avail: 99.5, budget: 5000 };
-    $("#title").value = doc.name || "Untitled design"; sim = null; running = false; clearInterval(timer); lastRec = null; chaos = {}; down = {}; hist = []; histAt = -1;
-    snapshot(); persist(); paintButtons(); showBanner(""); render(); fitView(); kpis(); paintChaos();
+    doc = next; levelPath = [{ level: 1, key: "1", node: null }]; levelCache.clear(); chaosCache = null; multi.clear(); highlight.clear(); doc.scenario = Object.assign({}, S.DEFAULT_SCENARIO, doc.scenario || {}); doc.slo = doc.slo || { p95: 200, avail: 99.5, budget: 5000 };
+    $("#title").value = doc.name || "Untitled design"; sim = null; running = false; clearInterval(timer); lastRec = null; chaos = {}; down = {}; if (!keepHistory) { hist = []; histAt = -1; }
+    snapshot(); persist(); paintButtons(); showBanner(""); render(); fitView(); kpis(); paintChaos(); scheduleCost();
   }
   async function memoryApi(path, body) {
     const r = await fetch(path, { method: body ? "POST" : "GET", headers: body ? { "Content-Type": "application/json", "X-YashAI": "1" } : {}, body: body ? JSON.stringify(body) : undefined });
@@ -1171,9 +1391,20 @@
     if (nodeEl) {
       const n = node(nodeEl.dataset.node);
       if (tool === "connect") { if (linkFrom && linkFrom !== n.id) { connect(linkFrom, n.id); linkFrom = null; } else { linkFrom = n.id; say("Now click the box to connect to."); } deepPart = ""; sel = { node: n.id, edge: null }; render(); return; }
-      const p = worldPt(e); drag = { id: n.id, dx: n.x - p.x, dy: n.y - p.y, sx: e.clientX, sy: e.clientY, moved: false }; deepPart = ""; sel = { node: n.id, edge: null }; if (tab === "parts" || tab === "architect" || architectResult) tab = "inspect"; render(); board.setPointerCapture(e.pointerId); return;
+      if (e.shiftKey) { if (sel.node && sel.node !== n.id && !multi.size) multi.add(sel.node); if (multi.has(n.id)) multi.delete(n.id); else multi.add(n.id); sel = { node: null, edge: null }; render(); return; }
+      if (!multi.has(n.id)) multi.clear();
+      if (n.props.locked && multi.size < 2) { deepPart = ""; sel = { node: n.id, edge: null }; render(); say("Locked: unlock it (L) to move it."); return; }
+      const now = Date.now();
+      if (aiWorkspace && lastDown.id === n.id && now - lastDown.t < 450) { lastDown = {}; drillInto(n); return; }   // the board re-renders between clicks, so native dblclick never reaches the box
+      lastDown = { id: n.id, t: now };
+      const p = worldPt(e), group = multi.size > 1 ? [...multi].filter((id) => node(id) && !node(id).props.locked).map((id) => ({ id, x: node(id).x, y: node(id).y })) : null;
+      drag = { id: n.id, dx: n.x - p.x, dy: n.y - p.y, sx: e.clientX, sy: e.clientY, moved: false, group, p0: p }; deepPart = ""; if (!group) { sel = { node: n.id, edge: null }; if (tab === "parts" || tab === "architect" || architectResult) tab = "inspect"; } render(); board.setPointerCapture(e.pointerId); return;
     }
-    if (edgeEl) { const [a, b] = edgeEl.dataset.edge.split("|"); sel = { node: null, edge: { from: a, to: b } }; tab = "inspect"; render(); return; }
+    if (edgeEl) { const [a, b] = edgeEl.dataset.edge.split("|"); multi.clear(); sel = { node: null, edge: { from: a, to: b } }; tab = "inspect"; render(); return; }
+    const gl = e.target.tagName === "text" && e.target.closest("[data-group]");
+    if (gl) { const g = (doc.groups || []).find((x) => x.id === gl.dataset.group); if (g) { multi = new Set(g.ids.filter((id) => node(id))); sel = { node: null, edge: null }; render(); return; } }
+    if (e.shiftKey && tool === "select") { const p = worldPt(e); marquee = { x1: p.x, y1: p.y, x2: p.x, y2: p.y }; board.setPointerCapture(e.pointerId); return; }
+    multi.clear(); highlight.clear();
     sel = { node: null, edge: null }; linkFrom = null; panning = { sx: e.clientX, sy: e.clientY, vx: view.x, vy: view.y }; board.setAttribute("class", "pan panning"); board.setPointerCapture(e.pointerId); render();
   });
   board.addEventListener("pointermove", (e) => {
@@ -1182,24 +1413,36 @@
     if (hoverNodeId !== nextHover) { hoverNodeId = nextHover; if (!drag && !panning && !rubber) render(true); }
     if (panning) { view.x = panning.vx + (e.clientX - panning.sx); view.y = panning.vy + (e.clientY - panning.sy); render(true); return; }
     if (rubber) { const p = worldPt(e); rubber.x2 = p.x; rubber.y2 = p.y; render(true); return; }
-    if (drag) { if (!drag.moved && Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy) < 4) return; drag.moved = true; const n = node(drag.id), p = worldPt(e); n.x = Math.round(p.x + drag.dx); n.y = Math.round(p.y + drag.dy); render(true); }
+    if (marquee) { const p = worldPt(e); marquee.x2 = p.x; marquee.y2 = p.y; render(true); return; }
+    if (drag) {
+      if (!drag.moved && Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy) < 4) return; drag.moved = true; const p = worldPt(e);
+      if (drag.group) drag.group.forEach((g) => { const n = node(g.id); n.x = Math.round(g.x + p.x - drag.p0.x); n.y = Math.round(g.y + p.y - drag.p0.y); });
+      else { const n = node(drag.id); n.x = Math.round(p.x + drag.dx); n.y = Math.round(p.y + drag.dy); }
+      render(true);
+    }
   });
   board.addEventListener("pointerup", (e) => {
     if (panning) { panning = null; board.setAttribute("class", ""); return; }
-    if (rubber) { const el = document.elementFromPoint(e.clientX, e.clientY), t = el && el.closest && el.closest("[data-node]"); const from = linkFrom; rubber = null; linkFrom = null; if (t && t.dataset.node !== from) connect(from, t.dataset.node); else render(); return; }
-    if (drag) { const d = drag; drag = null; if (d.moved) commit(false); else { render(); if (aiWorkspace) drillInto(node(d.id)); } }
+    if (marquee) {
+      const m = marquee, x0 = Math.min(m.x1, m.x2), x1 = Math.max(m.x1, m.x2), y0 = Math.min(m.y1, m.y2), y1 = Math.max(m.y1, m.y2); marquee = null;
+      doc.nodes.filter((n) => n.x >= x0 && n.x <= x1 && n.y >= y0 && n.y <= y1).forEach((n) => multi.add(n.id));
+      if (multi.size === 1) { sel = { node: [...multi][0], edge: null }; multi.clear(); } else sel = { node: null, edge: null };
+      render(); return;
+    }
+    if (rubber) { const t = document.elementsFromPoint(e.clientX, e.clientY).map((el) => el.closest && el.closest("[data-node]")).find(Boolean); const from = linkFrom; rubber = null; linkFrom = null; if (t && t.dataset.node !== from) connect(from, t.dataset.node); else render(); return; }
+    if (drag) { const d = drag; drag = null; if (d.moved) commit(false); else render(); }
   });
   // Some touchpads, accessibility tools, and embedded-browser controls emit a
   // click without a preceding pointerdown. Keep selection usable for them too.
   board.addEventListener("click", (e) => {
     const nodeEl = e.target.closest && e.target.closest("[data-node]");
-    if (!nodeEl || tool === "connect" || drag || panning || rubber) return;
-    const n = node(nodeEl.dataset.node); if (!n || (sel.node === n.id && tab === "inspect")) return;
+    if (!nodeEl || tool === "connect" || drag || panning || rubber || e.shiftKey || multi.size > 1) return;
+    const n = node(nodeEl.dataset.node); if (!n || n.props.locked || (sel.node === n.id && tab === "inspect")) return;
     deepPart = ""; sel = { node: n.id, edge: null };
     if (tab === "parts" || tab === "architect" || architectResult) tab = "inspect";
     render();
-    if (aiWorkspace) drillInto(n);
   });
+  let lastDown = {};
   board.addEventListener("wheel", (e) => {
     e.preventDefault(); const r = board.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top, k = Math.exp(-e.deltaY * 0.0012), z2 = clamp(view.z * k, 0.25, 2.5);
     view.x = mx - ((mx - view.x) / view.z) * z2; view.y = my - ((my - view.y) / view.z) * z2; view.z = z2; render();
@@ -1209,7 +1452,10 @@
   document.addEventListener("dragstart", (e) => { const b = e.target.closest && e.target.closest("[data-add]"); if (b) e.dataTransfer.setData("text/plain", b.dataset.add); });
 
   // ---------------------------------------------------------------- clicks and inputs
-  function paintChaos() { $$("[data-chaos]").forEach((b) => b.setAttribute("aria-pressed", String(!!chaos[b.dataset.chaos]))); }
+  function paintChaos() {
+    $$("[data-chaos]").forEach((b) => b.setAttribute("aria-pressed", String(!!chaos[b.dataset.chaos])));
+    const n = Object.values(chaos).filter(Boolean).length, s = $("#chaosCount"); if (s) s.textContent = n ? String(n) : "";
+  }
   document.addEventListener("click", (e) => {
     if (aiWorkspace) {
       const preview = e.target.closest && e.target.closest(".level-preview");
@@ -1233,7 +1479,7 @@
     if (t.dataset.bimport) { try { const m = BD.merge(lb, BD.decode($("#bcode").value)); lb = m.board; boardMsg = `Imported ${m.added} scores.`; saveBoard(); } catch (err) { boardMsg = err.message; } return renderBoard(); }
     if (t.dataset.provf) { provFilter = t.dataset.provf; return renderParts(); }
     if (t.dataset.swap && sel.node) { swapType(sel.node, t.dataset.swap); return; }
-    if (t.dataset.secall) { const open = t.dataset.secall === "open"; S.CATS.forEach((c) => { secState["cat:" + slug(c)] = open; }); try { localStorage.setItem(SKEY, JSON.stringify(secState)); } catch (x) { /* ignore */ } partsQuery = ""; return renderParts(); }
+    if (t.dataset.secall) { const open = t.dataset.secall === "open"; displayCats().forEach((c) => { secState["cat:" + slug(c)] = open; }); try { localStorage.setItem(SKEY, JSON.stringify(secState)); } catch (x) { /* ignore */ } partsQuery = ""; return renderParts(); }
     if (t.dataset.secmore) { const k = t.dataset.secmore; if (partsRowsExpanded.has(k)) partsRowsExpanded.delete(k); else partsRowsExpanded.add(k); return renderParts(); }
     if (t.dataset.mstart) { startMission(MISSIONS.find((x) => x.id === t.dataset.mstart)); tab = "missions"; updSide(); return; }
     if (t.dataset.mrun) return runMission();
@@ -1263,14 +1509,69 @@
     if (t.dataset.architectMode) { architectMode = t.dataset.architectMode; if (architectMode === "ai") { architectStack = "java-spring"; architectPrefs = { ...architectPrefs, style: "modular-monolith", frontends: 1, backends: 3, cloud: "aws", cicd: "github-actions", auth: "oidc", audit: "yes", observability: "yes", transaction: "outbox-saga", queue: "kafka" }; } return renderArchitect(); }
     if (t.dataset.tab) { tab = t.dataset.tab; updSide(); return; }
     if (t.dataset.tool) { tool = t.dataset.tool; linkFrom = null; $$("[data-tool]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.tool === tool))); render(); return; }
-    if (t.dataset.add) { const r = board.getBoundingClientRect(), n = doc.nodes.length; addNode(t.dataset.add, (r.width / 2 - view.x) / view.z + (n % 4) * 20, (r.height / 2 - view.y) / view.z + (n % 5) * 24 - 40); return; }
-    if (t.dataset.chaos) { chaos[t.dataset.chaos] = !chaos[t.dataset.chaos]; if (!running && !sim) say("Press Start first, then break things while it runs."); paintChaos(); return; }
-    if (t.dataset.pt) { const k = t.dataset.pt, v = t.dataset.v === "1"; if (k === "__down") { down[sel.node] = v; renderInspect(); return; } if (k === "fan" || k === "failover") { const e2 = doc.edges.find((x) => x.from === sel.edge.from && x.to === sel.edge.to); e2[k] = v; commit(); return; } node(sel.node).props[k] = v; commit(); return; }
+    if (t.dataset.add) {
+      // tap/click-to-add: next to the last box, on the first spot that overlaps nothing, then keep it in view
+      const r = board.getBoundingClientRect(), last = doc.nodes[doc.nodes.length - 1], right = (r.width - view.x) / view.z - NW / 2 - 10;
+      let x0 = last ? last.x + NW + 70 : (NW / 2 + 40 - view.x) / view.z, y0 = last ? last.y : (r.height / 2 - view.y) / view.z;
+      if (last && x0 > right) { x0 = Math.min(...doc.nodes.map((m) => m.x)); y0 = Math.max(...doc.nodes.map((m) => m.y)) + NH + 60; }   // wrap like text so boxes stay readable
+      const free = (x, y) => !doc.nodes.some((m) => Math.abs(m.x - x) < NW + 24 && Math.abs(m.y - y) < NH + 24);
+      let spot = [x0, y0];
+      for (let k = 0; k < 60 && !free(...spot); k++) spot = [x0 + (k % 3) * (NW + 70), y0 + (Math.floor(k / 3) + 1) * (NH + 50) * (k % 2 ? -1 : 1)];
+      const n = addNode(t.dataset.add, spot[0], spot[1]), sx = n.x * view.z + view.x, sy = n.y * view.z + view.y;
+      if (sx < NW / 2 || sy < NH / 2 || sx > r.width - NW / 2 || sy > r.height - NH / 2) fitView();
+      if (narrowGuide()) document.body.classList.add("rp-collapsed");   // show the new box, not the list
+      return;
+    }
+    if (t.dataset.chaos) { chaos[t.dataset.chaos] = !chaos[t.dataset.chaos]; if (!running && !sim) say("Press Start first, then break things while it runs."); else if (chaos[t.dataset.chaos]) noteGuide("broke"); paintChaos(); return; }
+    if (t.dataset.skill) {
+      const first = !!t.closest("#skillDlg");
+      setSkill(t.dataset.skill); const dl = $("#skillDlg"); if (dl && dl.open) dl.close();
+      // First visit as a beginner: swap the default example for its core version (no CI/CD and tooling boxes).
+      const p = PRESETS.find((x) => x.name === doc.name);
+      if (first && t.dataset.skill === "beginner" && p && p.coreBuild && doc.nodes.some((n) => /^z_/.test(n.id))) loadPreset(p);
+      return;
+    }
+    if (t.dataset.guide) { guideAction(t); return; }
+    if (t.dataset.pt) { const k = t.dataset.pt, v = t.dataset.v === "1"; if (k === "__down") { down[sel.node] = v; renderInspect(); return; } if ((k === "fan" || k === "failover" || k === "tls") && sel.edge) { const e2 = doc.edges.find((x) => x.from === sel.edge.from && x.to === sel.edge.to); e2[k] = v; commit(); return; } node(sel.node).props[k] = v; commit(); return; }
     if (t.parentElement && t.parentElement.id === "speed") { speed = +t.dataset.v; $$("#speed button").forEach((b) => b.setAttribute("aria-pressed", String(b === t))); if (running) { clearInterval(timer); timer = setInterval(tick, Math.round(300 / speed)); } return; }
     if (t.id === "play") return start(); if (t.id === "stop") return stop();
     if (t.id === "undo") return undo(-1); if (t.id === "redo") return undo(1);
     if (t.id === "zoomIn") { view.z = clamp(view.z * 1.2, 0.25, 2.5); return render(); } if (t.id === "zoomOut") { view.z = clamp(view.z / 1.2, 0.25, 2.5); return render(); }
     if (t.id === "zoomReset") { view.z = 1; return render(); } if (t.id === "fit") return fitView();
+    if (t.id === "costBtn") { renderCostPlan(); $("#costPlan").showModal(); return; }
+    if (t.id === "simBtn") { renderSimLab(); $("#simDlg").showModal(); return; }
+    if (t.id === "simClose") { $("#simDlg").close(); return; }
+    if (t.dataset.simRun || t.dataset.simPlay || t.dataset.simPath || t.dataset.simFix) { simAction(t); return; }
+    if (t.id === "exportBtn") { exportPreview = ""; renderExport(); $("#exportDlg").showModal(); return; }
+    if (t.id === "exportClose") { $("#exportDlg").close(); return; }
+    if (t.dataset.expDl || t.dataset.expView || t.dataset.expAll) { exportAction(t); return; }
+    if (t.dataset.multi) { multiAction(t.dataset.multi); return; }
+    if (t.dataset.drill) { const n = node(t.dataset.drill); if (n) drillInto(n); return; }
+    if (t.dataset.rp) { setRightTab(t.dataset.rp, true); return; }
+    if (t.classList.contains("rp-collapse") || t.id === "rpOpen") { document.body.classList.toggle("rp-collapsed"); try { localStorage.setItem("archlab.rp.collapsed", document.body.classList.contains("rp-collapsed") ? "1" : ""); } catch (x) { /* ignore */ } return; }
+    if (t.dataset.optSimplify && STU) { const st = STU.recommendStyle(doc); $("#optDlg").close(); fixPreview("Simplify to a modular monolith", STU.mergeServices(doc, st.simplify), st.why.join(" ")); return; }
+    if (t.id === "costClose") { $("#costPlan").close(); return; }
+    if (t.id === "changeApply") { const fn = pendingApply; pendingApply = null; $("#changeDlg").close(); if (fn) fn(); return; }
+    if (t.id === "changeCancel" || t.id === "changeClose") { pendingApply = null; $("#changeDlg").close(); say("Kept your canvas. The proposal is still in the AI panel if you want to review it again."); return; }
+    if (t.id === "verBtn") { verCompare = null; renderVersions(); $("#verDlg").showModal(); return; }
+    if (t.id === "verClose") { $("#verDlg").close(); return; }
+    if (t.dataset.verSave || t.dataset.verCompare || t.dataset.verRestore || t.dataset.verDelete || t.dataset.verApprove) { versionAction(t); return; }
+    if (t.id === "readyBtn") { renderReadiness(); $("#readyDlg").showModal(); return; }
+    if (t.id === "readyClose") { $("#readyDlg").close(); return; }
+    if (t.dataset.readyDownload) { downloadReadiness(); return; }
+    if (t.dataset.readyOpen) { $("#readyDlg").close(); const b = document.getElementById(t.dataset.readyOpen); if (b) b.click(); return; }
+    if (t.id === "wirePanelClose") { sel = { node: null, edge: null }; render(); return; }
+    if (t.id === "reqBtn") { renderRequirements(); $("#reqDlg").showModal(); return; }
+    if (t.id === "reqClose") { $("#reqDlg").close(); return; }
+    if (t.dataset.reqSave || t.dataset.reqBrief || t.dataset.reqAccept) { if (t.dataset.reqAccept && !window.confirm("Mark every value shown, including the assumed ones, as confirmed by you?")) return; saveRequirements(!!t.dataset.reqBrief, !!t.dataset.reqAccept); return; }
+    if (t.id === "optBtn") { renderOptions(); $("#optDlg").showModal(); return; }
+    if (t.id === "optClose") { $("#optDlg").close(); return; }
+    if (t.dataset.optApply || t.dataset.optSave) { optionAction(t); return; }
+    if (t.dataset.lintFix != null || t.dataset.lintFixAll || t.dataset.optimize) { lintFixAction(t); return; }
+    if (t.id === "lintBtn") { renderChecks(); $("#lintDlg").showModal(); return; }
+    if (t.id === "lintClose") { $("#lintDlg").close(); return; }
+    if (t.dataset.lintFocus) { const id = t.dataset.lintFocus; $("#lintDlg").close(); if (node(id)) { sel = { node: id, edge: null }; render(); say("Selected " + (node(id).props.name || S.BY_ID[node(id).type].name) + ". Its wires are highlighted."); } return; }
+    if (t.dataset.compliance) { doc.requirements = doc.requirements || {}; const list = new Set(doc.requirements.compliance || []), k = t.dataset.compliance; if (k === "none") { doc.requirements.complianceNone = !doc.requirements.complianceNone; if (doc.requirements.complianceNone) list.clear(); } else { if (list.has(k)) list.delete(k); else list.add(k); doc.requirements.complianceNone = false; } doc.requirements.compliance = [...list]; commit(false); renderChecks(); return; }
     if (t.dataset.memoryId) { memoryApi("/api/architecture-lab/load", { id: t.dataset.memoryId }).then((data) => { $("#memory").close(); useDocument(data.document); say(`Opened “${doc.name || "project"}” from YashAI memory.`); }).catch((err) => say(err.message)); return; }
     const act = t.dataset.act; if (!act) return; $("#fileMenu").hidden = true;
     if (act === "new") { if (window.confirm("Start a new board? Unsaved changes are lost.")) resetSimple(); }
@@ -1278,12 +1579,12 @@
     else if (act === "clearCanvas") { if (window.confirm("Clear every component and wire from this canvas?")) clearCanvas(); }
     else if (act === "deleteSelected") { if (!sel.node && !sel.edge) say("Select a component or wire on the board first."); else { delSel(); say("Selection deleted."); } }
     else if (act === "open") $("#file").click(); else if (act === "save") download(JSON.stringify(doc, null, 1), (doc.name || "design").replace(/[^a-z0-9]+/gi, "-").toLowerCase() + ".archlab.json", "application/json");
-    else if (act === "aiReview" || act === "mentorReview") { aiReview(); }
+    else if (act === "aiReview" || act === "mentorReview") { if (act === "mentorReview") tab = "architect"; aiReview(); }   // answer where it was asked; selecting a box may have moved tab to "inspect"
     else if (act === "openDelivery") { location.href = `${location.pathname}?tab=delivery`; }
     else if (act === "runArchitect") { aiArchitect(); }
     else if (act === "improveArchitect") { improveArchitectBrief(); }
     else if (act === "editArchitect") { architectResult = null; renderArchitect(); $("#architectPrompt").focus(); }
-    else if (act === "applyArchitect" && architectResult) { useDocument(architectResult.document); architectResult = null; tab = "live"; updSide(); say("AI architecture loaded. Run traffic, then ask the reviewer for improvements."); }
+    else if (act === "applyArchitect" && architectResult) previewArchitect();
     else if (act === "freezeDelivery") { doc.delivery = { frozenAt: new Date().toISOString() }; persist(); snapshot(); renderDelivery(); say("Architecture frozen locally. Create the implementation handoff when ready."); }
     else if (act === "unfreezeDelivery") { delete doc.delivery; persist(); snapshot(); renderDelivery(); say("Architecture is editable again."); }
     else if (act === "downloadBundle") { const name = (doc.name || "architecture").replace(/[^a-z0-9]+/gi, "-").toLowerCase(); download(JSON.stringify(implementationBundle(), null, 2), `${name}-build-package.json`, "application/json"); say("Build package downloaded: API, database, ADR, CI/CD, deployment, and handoff."); }
@@ -1293,7 +1594,8 @@
     else if (act === "brief") download(buildBrief(), (doc.name || "design").replace(/[^a-z0-9]+/gi, "-").toLowerCase() + "-design-brief.md", "text/markdown");
     else if (act === "prompt") copy(buildPrompt(), "Prompt copied"); else if (act === "share") copy(location.origin + location.pathname + "#d=" + btoa(unescape(encodeURIComponent(JSON.stringify(doc)))), "Share link copied");
     else if (act === "help") $("#help").showModal(); else if (act === "delNode" || act === "delEdge") delSel();
-    else if (act === "dup") { const n = node(sel.node); const c = JSON.parse(JSON.stringify(n)); c.id = uid(); c.x += 30; c.y += 40; c.props.name = (n.props.name || S.BY_ID[n.type].name) + " copy"; doc.nodes.push(c); sel = { node: c.id, edge: null }; commit(); }
+    else if (act === "dup") { if (sel.node) duplicateIds([sel.node]); }
+    else if (act === "layout" && STU) { tidyLayout(); say("Arranged by request flow and layer (locked boxes stayed). Undo (Ctrl+Z) restores the previous positions."); }
   });
   document.addEventListener("input", (e) => {
     const t = e.target; if (!t.dataset) return;
@@ -1304,6 +1606,7 @@
   });
   document.addEventListener("change", (e) => {
     const t = e.target; if (!t.dataset) return;
+    if (t.id === "provSel") { provFilter = t.value; return renderParts(); }
     if (t.dataset.architectPref) { architectPrefs[t.dataset.architectPref] = t.value; architectMode = "manual"; return renderArchitect(); }
     if (t.dataset.architectStackSelect != null) { architectStack = t.value; architectMode = "manual"; return renderArchitect(); }
     if (t.dataset.llook != null && lldId) { const k = "lld:" + lldId, p = iprog[k] || (iprog[k] = { look: [] }), i = +t.dataset.llook; p.look = p.look.filter((x) => x !== i); if (t.checked) p.look.push(i); saveI(); return; }
@@ -1311,6 +1614,7 @@
     else if (t.dataset.meas && sel.node) { const p = node(sel.node).props; p.measured = p.measured || {}; p.measured[t.dataset.meas] = t.checked; commit(false); }
     else if (t.dataset.cf) { const [i, k] = t.dataset.cf.split(":"), f = cfaults[+i]; if (f) { f[k] = ["type", "target"].includes(k) ? t.value : +t.value; if (k === "type") f.target = defaultTarget(t.value); } renderCollapse(); }
     else if (t.dataset.bname) { lb.player = (t.value || "You").slice(0, 30); saveBoard(); renderBoard(); }
+    else if (t.dataset.pc && sel.node) { const p = node(sel.node).props, v = t.value.trim().slice(0, 500); if (v) p.comment = v; else delete p.comment; commit(false); }
     else if (t.dataset.ps && sel.node) { node(sel.node).props[t.dataset.ps] = t.value; commit(); paintRegionChaos(); }
     else if (t.dataset.es && sel.edge) { doc.edges.find((x) => x.from === sel.edge.from && x.to === sel.edge.to)[t.dataset.es] = t.value; commit(); }
     else if (t.dataset.e && sel.edge) { const e2 = doc.edges.find((x) => x.from === sel.edge.from && x.to === sel.edge.to); e2[t.dataset.e] = +t.value; commit(); }
@@ -1322,10 +1626,13 @@
     const typing = /INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName);
     if (e.key === " " && !typing) { spaceDown = true; e.preventDefault(); }
     if (typing) return;
-    if ((e.key === "Delete" || e.key === "Backspace") && (sel.node || sel.edge)) { delSel(); e.preventDefault(); }
+    if ((e.key === "Delete" || e.key === "Backspace") && (sel.node || sel.edge || multi.size)) { delSel(); e.preventDefault(); }
     else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") { undo(e.shiftKey ? 1 : -1); e.preventDefault(); } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "y") { undo(1); e.preventDefault(); }
-    else if (e.key === "Escape") { sel = { node: null, edge: null }; linkFrom = null; rubber = null; render(); }
+    else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "d" && selectionIds().length) { duplicateIds(selectionIds()); e.preventDefault(); }
+    else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a") { multi = new Set(doc.nodes.map((n) => n.id)); sel = { node: null, edge: null }; render(); e.preventDefault(); }
+    else if (e.key === "Escape") { sel = { node: null, edge: null }; linkFrom = null; rubber = null; marquee = null; multi.clear(); highlight.clear(); render(); }
     else if (e.ctrlKey || e.metaKey || e.altKey) { /* leave browser shortcuts alone */ }
+    else if (e.key === "l" || e.key === "L") { toggleLock(selectionIds()); }
     else if (e.key === "v") { document.querySelector('[data-tool="select"]').click(); } else if (e.key === "h") { document.querySelector('[data-tool="hand"]').click(); } else if (e.key === "c") { document.querySelector('[data-tool="connect"]').click(); }
     else if (e.key === "+" || e.key === "=") { view.z = clamp(view.z * 1.2, 0.25, 2.5); render(); } else if (e.key === "-") { view.z = clamp(view.z / 1.2, 0.25, 2.5); render(); }
   });
@@ -1375,7 +1682,7 @@
   try { const m = /^#d=(.+)$/.exec(location.hash); if (m) { startDoc = JSON.parse(decodeURIComponent(escape(atob(m[1])))); if (!startDoc.nodes || !startDoc.edges) startDoc = null; } } catch (e) { startDoc = null; }
   if (startDoc) { try { history.replaceState(null, "", location.pathname + location.search); } catch (e) { /* ignore */ } }
   const referencePreset = PRESETS.find((p) => p.id === referenceExample) || PRESETS.find((p) => p.id === "urlshort");
-  doc = startDoc || (referenceMode ? fresh(referencePreset) : loadDoc()) || (practiceMode ? practiceStarter() : fresh(PRESETS.find((p) => p.id === "urlshort")));
+  doc = startDoc || (referenceMode ? fresh(query.get("core") === "1" && referencePreset.coreBuild ? { build: referencePreset.coreBuild } : referencePreset) : loadDoc()) || (practiceMode ? practiceStarter() : fresh(PRESETS.find((p) => p.id === "urlshort")));
   if (aiWorkspace && doc.nodes.some((n) => n.props && n.props.__aiGenerated)) {
     const removed = new Set(doc.nodes.filter((n) => n.props && n.props.__aiGenerated).map((n) => n.id));
     doc.nodes = doc.nodes.filter((n) => !removed.has(n.id)); doc.edges = doc.edges.filter((e) => !removed.has(e.from) && !removed.has(e.to)); persist();
@@ -1483,6 +1790,506 @@
     paint();
     tools.appendChild(btn);
   })();
+  // ---- Budget & cost plan: every node on this one canvas (Level 1, 2 and 3 together) is priced.
+  function costNow() {
+    if (!C || !doc || !doc.nodes.length) return null;
+    const r = C.sizeAndPrice(graphForSim(), doc.scenario, (+doc.scenario.base || 1000) * costOpts.trafficMult, "asis", false);
+    return r.error ? null : r.total;
+  }
+  function paintCostPill() {
+    const pill = $("#costPill"); if (!pill) return;
+    if (costLast == null) { pill.textContent = ""; return; }
+    const d = Math.round(costDelta);
+    pill.innerHTML = `≈${money(costLast)}/mo` + (d ? ` <i class="${d > 0 ? "up" : "down"}">${d > 0 ? "+" : "−"}${money(Math.abs(d))}</i>` : "");
+  }
+  function scheduleCost() {
+    clearTimeout(costTimer);
+    costTimer = setTimeout(() => {
+      const now = costNow(); costDelta = costLast != null && now != null ? now - costLast : 0; costLast = now; paintCostPill();
+      if ($("#costPlan") && $("#costPlan").open) renderCostPlan();
+      paintLintPill(); paintReqPill(); paintSimPill(); if ($("#lintDlg") && $("#lintDlg").open) renderChecks();
+    }, 450);
+  }
+  // ---- AI change preview: nothing the AI proposes touches the canvas until the user approves it.
+  const DF = window.LabDiff;
+  let pendingApply = null;
+  function previewArchitect() {
+    const r = architectResult; if (!r || r.error) return;
+    previewChange({
+      title: "AI Architect proposal: " + (r.document.name || "new architecture"),
+      next: r.document,
+      benefits: [r.explanation].filter(Boolean),
+      risks: (r.risks || []).concat((r.assumptions || []).map((x) => "Assumption: " + x)),
+      onApply: () => { useDocument(JSON.parse(JSON.stringify(r.document)), true); architectApplied = true; sel = { node: null, edge: null }; deepPart = ""; levelPath = [{ level: 1, key: "1", node: null }]; levelCache.clear(); tab = aiWorkspace ? "architect" : "inspect"; updSide(); say("Applied the AI architecture. Undo (Ctrl+Z) brings your previous canvas back."); },
+    });
+  }
+  function priceOf(d) {
+    if (!C) return null;
+    const sc = d.scenario || doc.scenario;
+    const r = C.sizeAndPrice({ nodes: d.nodes.map((n) => ({ id: n.id, type: n.type, props: n.props || {} })), edges: d.edges }, sc, (+sc.base || 1000) * costOpts.trafficMult, "asis", false);
+    return r.error ? null : r.total;
+  }
+  function previewChange(o) {
+    const dlg = $("#changeDlg"), body = $("#changeBody");
+    if (!dlg || !body || !DF) { if (window.confirm("Replace the canvas with the AI proposal?")) o.onApply(); return; }
+    const next = Object.assign({ scenario: doc.scenario, slo: doc.slo, requirements: doc.requirements }, JSON.parse(JSON.stringify(o.next)));
+    const d = DF.diff(doc, next, (n) => (n.props && n.props.name) || (S.BY_ID[n.type] || {}).name || n.type), c0 = priceOf(doc), c1 = priceOf(next);
+    const l0 = LINT ? LINT.lint(doc, { rps: +doc.scenario.base || 1000 }) : null;
+    const l1 = LINT ? LINT.lint(next, { rps: +(next.scenario || doc.scenario).base || 1000 }) : null;
+    const key = (f) => f.id + "|" + f.title;
+    const newF = l0 && l1 ? l1.findings.filter((f) => !l0.findings.some((g) => key(g) === key(f))) : [];
+    const fixedF = l0 && l1 ? l0.findings.filter((f) => !l1.findings.some((g) => key(g) === key(f))) : [];
+    const list = (items, fmt, max) => {
+      const m = max || 12;
+      if (!items.length) return `<p class="muted">None.</p>`;
+      return `<ul>${items.slice(0, m).map((x) => `<li>${fmt(x)}</li>`).join("")}${items.length > m ? `<li class="muted">and ${items.length - m} more</li>` : ""}</ul>`;
+    };
+    const nm = (x) => { const t = (S.BY_ID[x.type] || {}).name || x.type; return esc(x.name) + (t !== x.name ? ` <small>${esc(t)}</small>` : ""); };
+    const delta = c0 != null && c1 != null ? c1 - c0 : null;
+    pendingApply = o.onApply;
+    $("#changeTitle").textContent = o.title;
+    body.innerHTML = `
+      <p class="cost-note">This is a preview. Your canvas has not changed. Apply replaces it with the proposal below; Undo brings your current canvas back.</p>
+      <div class="change-stats">
+        <div><span>Boxes</span><b>+${d.added.length} / −${d.removed.length} / ~${d.changed.length}</b></div>
+        <div><span>Wires</span><b>+${d.edgesAdded.length} / −${d.edgesRemoved.length}</b></div>
+        <div><span>Monthly estimate</span><b>${c0 == null ? "—" : money(c0)} → ${c1 == null ? "—" : money(c1)}</b>${delta != null ? `<small class="${delta > 0 ? "up" : "down"}">${delta >= 0 ? "+" : "−"}${money(Math.abs(delta))}/month</small>` : ""}</div>
+        <div><span>Blocking checks</span><b>${l0 ? l0.blocking : "—"} → ${l1 ? l1.blocking : "—"}</b><small>${newF.length} new · ${fixedF.length} resolved</small></div>
+      </div>
+      <div class="change-cols">
+        <section><h3>Boxes added</h3>${list(d.added, nm)}<h3>Boxes removed</h3>${list(d.removed, nm)}<h3>Boxes changed</h3>${list(d.changed, (x) => nm(x) + `<small>${x.fields.map((f) => esc(f.key)).join(", ")}</small>`)}</section>
+        <section><h3>Wires added</h3>${list(d.edgesAdded, esc, 10)}<h3>Wires removed</h3>${list(d.edgesRemoved, esc, 10)}</section>
+      </div>
+      ${o.changesList && o.changesList.length ? `<h3>What this change does</h3>${list(o.changesList, esc, 20)}` : ""}
+      ${o.benefits && o.benefits.length ? `<h3>Why</h3>${o.benefits.map((b) => `<p>${esc(b)}</p>`).join("")}` : ""}
+      <h3>Risks and assumptions</h3>${list(o.risks || [], esc)}
+      <h3>New check findings</h3>${list(newF, (f) => `<span class="lint-sev ${f.sev}">${esc(f.sev)}</span> ${esc(f.title)}`)}
+      <h3>Findings it resolves</h3>${list(fixedF, (f) => esc(f.title))}
+      <p class="cost-foot">Cost is the teaching estimate at the current traffic. The explanation comes from a local model, so check it against the findings above.</p>
+      <div class="btnrow change-actions"><button class="primary-sm" id="changeApply">Apply to canvas</button><button id="changeCancel">Keep my canvas</button></div>`;
+    dlg.showModal();
+  }
+  // ---- Versions: named snapshots of the canvas with a fingerprint, compare, restore (previewed) and approval.
+  const VKEY = KEY + ".versions";
+  function loadVersions() { try { const v = JSON.parse(localStorage.getItem(VKEY)); return Array.isArray(v) ? v : []; } catch (e) { return []; } }
+  function storeVersions(list) { try { localStorage.setItem(VKEY, JSON.stringify(list.slice(0, 40))); return true; } catch (e) { say("Could not save versions in this browser (storage full or blocked)."); return false; } }
+  let verCompare = null;
+  function docCore(d) { return { name: d.name, nodes: d.nodes, edges: d.edges, scenario: d.scenario, slo: d.slo, requirements: d.requirements || {} }; }
+  function saveVersion(label) {
+    const list = loadVersions(), full = JSON.parse(JSON.stringify(doc)), h = DF.hash(docCore(full));
+    if (list[0] && list[0].hash === h) { say("This exact design is already saved as “" + list[0].name + "”."); return; }
+    const lint = LINT ? LINT.lint(doc, { rps: +doc.scenario.base || 1000, monthlyCost: costLast }) : null;
+    list.unshift({ id: "v" + Date.now().toString(36), name: label || "Version " + (list.length + 1), at: new Date().toISOString(), hash: h, cost: costLast, blocking: lint ? lint.blocking : null, doc: full });
+    if (storeVersions(list)) say("Saved version “" + list[0].name + "” (" + h + ").");
+  }
+  function renderVersions() {
+    const body = $("#verBody"); if (!body) return;
+    const list = loadVersions(), cur = DF.hash(docCore(doc));
+    let reviewer = ""; try { reviewer = localStorage.getItem("archlab.reviewer") || ""; } catch (e) { /* ignore */ }
+    const cmp = verCompare && list.find((v) => v.id === verCompare);
+    let cmpHtml = "";
+    if (cmp) {
+      const d = DF.diff(cmp.doc, doc, (n) => (n.props && n.props.name) || (S.BY_ID[n.type] || {}).name || n.type), c1 = costLast, c0 = cmp.cost;
+      const li = (arr, f) => arr.length ? arr.slice(0, 10).map((x) => `<li>${f(x)}</li>`).join("") + (arr.length > 10 ? `<li class="muted">and ${arr.length - 10} more</li>` : "") : `<li class="muted">none</li>`;
+      cmpHtml = `<section class="ver-compare"><h3>“${esc(cmp.name)}” → current canvas</h3>${d.empty ? `<p class="muted">No differences: the canvas matches this version.</p>` : `
+        <div class="change-stats"><div><span>Boxes</span><b>+${d.added.length} / −${d.removed.length} / ~${d.changed.length}</b></div><div><span>Wires</span><b>+${d.edgesAdded.length} / −${d.edgesRemoved.length}</b></div><div><span>Monthly estimate</span><b>${c0 == null ? "—" : money(c0)} → ${c1 == null ? "—" : money(c1)}</b>${c0 != null && c1 != null ? `<small class="${c1 > c0 ? "up" : "down"}">${c1 >= c0 ? "+" : "−"}${money(Math.abs(c1 - c0))}/month</small>` : ""}</div></div>
+        <div class="change-cols"><section><h4>Added since</h4><ul>${li(d.added, (x) => esc(x.name))}</ul><h4>Removed since</h4><ul>${li(d.removed, (x) => esc(x.name))}</ul><h4>Changed since</h4><ul>${li(d.changed, (x) => esc(x.name) + ` <small>${x.fields.map((f) => esc(f.key)).join(", ")}</small>`)}</ul></section>
+        <section><h4>Wires added</h4><ul>${li(d.edgesAdded, esc)}</ul><h4>Wires removed</h4><ul>${li(d.edgesRemoved, esc)}</ul>${d.scenarioChanged ? `<p>Traffic or goals changed.</p>` : ""}</section></div>`}</section>`;
+    }
+    body.innerHTML = `
+      <p class="cost-note">A version is a frozen copy of the whole canvas (every level, traffic and goals) with a fingerprint. Versions are kept in this browser. Restoring shows a preview first; approving records who signed off on that exact fingerprint.</p>
+      <section class="cost-inputs"><label>Name <input id="verName" type="text" maxlength="60" placeholder="e.g. Lean MVP after review"></label><button class="primary-sm" type="button" data-ver-save="1">Save current canvas</button><span class="muted">Current fingerprint <code>${cur}</code></span>
+        <label>Approver <input id="verReviewer" type="text" maxlength="60" value="${esc(reviewer)}" placeholder="your name"></label></section>
+      ${list.length ? `<table class="cost-table ver-table"><thead><tr><th>Version</th><th>Saved</th><th>Fingerprint</th><th>Est. / month</th><th>Blocking</th><th>Approval</th><th></th></tr></thead><tbody>${list.map((v) => `<tr class="${v.hash === cur ? "is-current" : ""}">
+        <td><b>${esc(v.name)}</b>${v.hash === cur ? `<small>matches the canvas</small>` : ""}</td><td>${esc(new Date(v.at).toLocaleString())}</td><td><code>${esc(v.hash)}</code></td><td>${v.cost == null ? "—" : money(v.cost)}</td><td>${v.blocking == null ? "—" : v.blocking}</td>
+        <td>${v.approvedAt ? `✓ ${esc(v.approvedBy)}<small>${esc(new Date(v.approvedAt).toLocaleDateString())}</small>` : `<button type="button" data-ver-approve="${v.id}">Approve</button>`}</td>
+        <td class="ver-actions"><button type="button" data-ver-compare="${v.id}">Compare</button><button type="button" data-ver-restore="${v.id}">Restore…</button><button type="button" data-ver-delete="${v.id}" title="Delete this version">✕</button></td></tr>`).join("")}</tbody></table>` : `<p class="muted">No versions yet. Save one before and after each big change so you can compare cost and risk.</p>`}
+      ${cmpHtml}`;
+  }
+  function versionAction(t) {
+    const list = loadVersions();
+    if (t.dataset.verSave) { saveVersion(($("#verName").value || "").trim()); verCompare = null; return renderVersions(); }
+    const id = t.dataset.verCompare || t.dataset.verRestore || t.dataset.verDelete || t.dataset.verApprove, v = list.find((x) => x.id === id); if (!v) return;
+    if (t.dataset.verCompare) { verCompare = verCompare === id ? null : id; return renderVersions(); }
+    if (t.dataset.verDelete) { if (!window.confirm("Delete version “" + v.name + "”? This cannot be undone.")) return; storeVersions(list.filter((x) => x.id !== id)); if (verCompare === id) verCompare = null; return renderVersions(); }
+    if (t.dataset.verApprove) {
+      const who = ($("#verReviewer").value || "").trim(); if (!who) { say("Type the approver's name first."); $("#verReviewer").focus(); return; }
+      try { localStorage.setItem("archlab.reviewer", who); } catch (e) { /* ignore */ }
+      v.approvedBy = who; v.approvedAt = new Date().toISOString(); storeVersions(list); say("Recorded approval of “" + v.name + "” (" + v.hash + ") by " + who + "."); return renderVersions();
+    }
+    if (t.dataset.verRestore) { $("#verDlg").close(); previewChange({ title: "Restore version: " + v.name, next: v.doc, benefits: ["Brings back the canvas saved on " + new Date(v.at).toLocaleString() + " (fingerprint " + v.hash + ")."], risks: [], onApply: () => { useDocument(JSON.parse(JSON.stringify(v.doc)), true); say("Restored “" + v.name + "”. Undo brings the previous canvas back."); } }); }
+  }
+  // ---- Readiness: level, score, blocking items, approvals and the downloadable report.
+  const RP = window.LabReport;
+  function readinessCtx() {
+    const lint = lintNow(), plan = C ? C.plan({ nodes: doc.nodes, edges: doc.edges, scenario: doc.scenario, slo: doc.slo, requirements: doc.requirements }, costOpts) : null;
+    const run = S.run(graphForSim(), doc.scenario, []);
+    const normal = run.error ? null : { p95: run.summary.p95, availability: run.summary.availability, cost: run.summary.cost };
+    const chaos = run.error ? null : chaosReadiness();
+    return { doc, hash: DF.hash(docCore(doc)), lint, plan: plan && !plan.error ? plan : null, normal, chaos, scen: SCN ? runSimLab() : null, versions: loadVersions(), brief: architectDraft || (RQ ? RQ.brief(doc) : "") };
+  }
+  function renderReadiness() {
+    const body = $("#readyBody"); if (!body) return;
+    if (!RP) { body.innerHTML = `<p class="muted">The report module did not load.</p>`; return; }
+    const ctx = readinessCtx(), a = RP.assess(ctx);
+    body.innerHTML = `
+      <p class="cost-note">Readiness comes only from evidence the tool has: the checks, the simulator, recorded requirements and a named approval of this exact canvas (fingerprint <code>${ctx.hash}</code>). Levels 3 to 5 need real tests, expert sign-off and production data, so the tool lists what they require but never awards them.</p>
+      <div class="ready-top"><div class="ready-score"><b>${a.score}</b><span>/100 ready to implement</span></div>
+        <ol class="ready-ladder">${a.LEVELS.map((l) => `<li class="${l.n < a.level ? "done" : l.n === a.level ? "now" : l.n > 2 ? "ext" : ""}"><b>${l.n}. ${esc(l.name)}</b><span>${esc(l.means)}</span></li>`).join("")}</ol></div>
+      <h3>Score breakdown</h3><table class="cost-table ready-parts"><tbody>${a.parts.map((p) => `<tr><td><b>${esc(p.label)}</b><small>${esc(p.note)}</small></td><td>${p.got} / ${p.max}</td></tr>`).join("")}</tbody></table>
+      <h3>Blocking implementation <small>${a.blocking.length}</small></h3>${a.blocking.length ? `<ul class="cost-lint">${a.blocking.map((b) => `<li class="${/^Critical/.test(b) ? "bad" : "warn"}"><i>${/^Critical/.test(b) ? "✖" : "▲"}</i><span>${esc(b)}</span></li>`).join("")}</ul>` : `<p class="muted">Nothing the tool can check is blocking. Next gate: ${esc(a.next.name)}.</p>`}
+      <h3>Required human approvals</h3><table class="cost-table"><tbody>${a.approvals.map((x) => `<tr><td><b>${esc(x.role)}</b></td><td>${esc(x.status)}</td></tr>`).join("")}</tbody></table>
+      <div class="btnrow change-actions"><button class="primary-sm" type="button" data-ready-download="1">Download readiness report (.md)</button><button type="button" data-ready-open="verBtn">Versions &amp; approval</button><button type="button" data-ready-open="lintBtn">Checks</button><button type="button" data-ready-open="costBtn">Cost plan</button></div>`;
+  }
+  function downloadReadiness() {
+    const ctx = readinessCtx(), a = RP.assess(ctx);
+    const md = RP.markdown(Object.assign({}, ctx, { a, byId: S.BY_ID, docs: DOCS.D || {}, stamp: new Date().toISOString().replace("T", " ").slice(0, 16) + " UTC" }));
+    const blob = new Blob([md], { type: "text/markdown" }), url = URL.createObjectURL(blob), link = document.createElement("a");
+    link.href = url; link.download = ((doc.name || "architecture").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "architecture") + "-readiness-" + ctx.hash + ".md";
+    document.body.appendChild(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 2000);
+    say("Downloaded the readiness report for fingerprint " + ctx.hash + ".");
+  }
+  // ---- Design studio: requirements, fixes, options and component explanations.
+  const RQ = window.LabReq, FX = window.LabFixes;
+  const reqOpts = () => { const r = doc.requirements || {}; return { rps: +doc.scenario.base || 1000, cloud: r.cloud && r.cloud !== "any" ? r.cloud : "" }; };
+  function paintReqPill() { const pill = $("#reqPill"); if (!pill || !RQ || !doc) return; const n = RQ.state(doc).questions.length; pill.textContent = n ? n + " open" : "done"; pill.className = n ? "warn" : "ok"; }
+  function renderRequirements() {
+    const body = $("#reqBody"); if (!body || !RQ) return;
+    const st = RQ.state(doc), groups = [...new Set(st.fields.map((f) => f.group))], sugg = RQ.suggestedCompliance(doc), comp = (doc.requirements || {}).compliance || [];
+    const input = (f) => {
+      if (f.kind.startsWith("select:")) return `<select data-req="${f.key}">${f.kind.slice(7).split("|").map((o) => { const [v, l] = o.split("="); return `<option value="${esc(v)}" ${String(f.value) === v ? "selected" : ""}>${esc(l)}</option>`; }).join("")}</select>`;
+      if (f.kind === "text") return `<input type="text" data-req="${f.key}" value="${esc(f.value || "")}" maxlength="${f.key === "idea" ? 600 : 80}" placeholder="${f.key === "idea" ? "e.g. Clinics book appointments online; patients get reminders by SMS" : ""}">`;
+      return `<input type="number" data-req="${f.key}" value="${esc(f.value)}" min="0">`;
+    };
+    body.innerHTML = `
+      <p class="cost-note">The canvas stays the source of truth; these answers set the traffic, goals and constraints that the simulator, checks, cost plan and readiness use. Anything you have not answered is shown as an <b>assumption</b>. Saved answers count as user-confirmed.</p>
+      ${st.questions.length ? `<section class="req-questions"><h3>Clarifying questions <small>${st.questions.length} open</small></h3><ol>${st.questions.map((q) => `<li><b>${esc(q.label)}</b><span>${esc(q.why)} Using for now: <em>${esc(q.value === "" ? "not set" : q.value)}</em></span></li>`).join("")}</ol></section>` : `<p class="cost-sub"><b>All essential questions answered.</b></p>`}
+      <form id="reqForm" class="req-form" onsubmit="return false">${groups.map((g) => `<fieldset><legend>${esc(g)}</legend>${st.fields.filter((f) => f.group === g).map((f) => `<label class="req-field ${f.confirmed ? "ok" : "assumed"}${f.key === "idea" ? " wide" : ""}"><span>${esc(f.label)} <i>${f.confirmed ? "confirmed" : "assumed"}</i></span>${input(f)}<small>${esc(f.why)}</small></label>`).join("")}</fieldset>`).join("")}</form>
+      <p class="cost-sub">Compliance: ${comp.length ? comp.map((x) => x.toUpperCase()).join(", ") : (doc.requirements || {}).complianceNone ? "none apply" : "not recorded"}${sugg.length ? ` · the data you handle suggests ${sugg.map((x) => x.toUpperCase()).join(", ")}` : ""}. Set it under Checks.</p>
+      ${st.assumptions.length ? `<details class="req-assume"><summary>Assumptions in use (${st.assumptions.length})</summary><ul>${st.assumptions.map((a) => `<li>${esc(a)}</li>`).join("")}</ul></details>` : ""}
+      <div class="btnrow change-actions"><button class="primary-sm" type="button" data-req-save="1">Save my answers</button><button type="button" data-req-brief="1">Save and use as AI Architect brief</button><button type="button" data-req-accept="1" title="Confirms every value shown, including the assumed ones">Accept all shown values…</button></div>`;
+    $$("#reqForm [data-req]").forEach((el) => { const mark = () => { el.dataset.touched = "1"; el.closest(".req-field").classList.add("edited"); }; el.addEventListener("input", mark); el.addEventListener("change", mark); });
+  }
+  function saveRequirements(useAsBrief, acceptAll) {
+    // Only what the user typed or chose (or explicitly accepted) becomes "user-confirmed"; untouched
+    // assumed values stay assumptions, so the readiness score cannot be inflated by pressing Save.
+    const answers = {}, st = RQ.state(doc).fields;
+    $$("#reqForm [data-req]").forEach((el) => { const f = st.find((x) => x.key === el.dataset.req); if (!f) return; if (f.confirmed || el.dataset.touched || acceptAll) answers[f.key] = el.value; });
+    doc = RQ.apply(doc, answers); commit();
+    if (useAsBrief || !architectDraft) { const b = RQ.brief(doc); if (b) architectDraft = b; }
+    if (aiWorkspace) renderArchitect();
+    renderRequirements(); paintReqPill();
+    const msg = useAsBrief ? "Saved. The AI Architect brief now uses these answers." : "Saved your answers. Traffic and goals on the canvas were updated.";
+    say(msg);
+    const acts = $("#reqDlg .change-actions"); if (acts) acts.insertAdjacentHTML("afterbegin", `<p class="req-saved" role="status">✓ ${esc(msg)}</p>`);   // the banner is behind the open popup
+  }
+  function fixPreview(title, result, why) {
+    if (!result.changes.length) { say("Nothing to change automatically for that."); return; }
+    previewChange({ title, next: result.doc, benefits: [why].filter(Boolean), risks: ["Automatic fixes use generic parts and teaching sizes; rename and size them for your stack.", "Review new wires: they change how traffic flows in the simulator."], changesList: result.changes, onApply: () => { useDocument(JSON.parse(JSON.stringify(result.doc)), true); say("Applied: " + result.changes.join("; ") + ". Undo brings the previous canvas back."); } });
+  }
+  function lintFixAction(t) {
+    const r = lintNow(); if (!r || !FX) return;
+    if (t.dataset.lintFix != null) { const f = r.findings[+t.dataset.lintFix]; if (!f) return; $("#lintDlg").close(); fixPreview("Fix: " + f.title, FX.applyFix(doc, f, reqOpts()), f.fix); return; }
+    if (t.dataset.lintFixAll) { $("#lintDlg").close(); fixPreview("Fix all blocking findings", FX.fixBlocking(doc, reqOpts()), "Applies the automatic fix for every critical and high finding, re-checking after each one."); return; }
+    if (t.dataset.optimize) { $("#lintDlg").close(); fixPreview("Optimize for " + t.dataset.optimize, FX.optimize(doc, t.dataset.optimize, reqOpts()), "Applies every automatic fix in the " + t.dataset.optimize + " group."); }
+  }
+  let optCache = null;
+  function renderOptions() {
+    const body = $("#optBody"); if (!body || !FX) return;
+    optCache = FX.options(doc, reqOpts());
+    const r = doc.requirements || {}, rec = r.priority === "lowest" || r.priority === "speed" ? "A" : r.priority === "ha" || +doc.slo.avail >= 99.95 ? "C" : "B";
+    const cards = optCache.map((o) => {
+      const base0 = priceOf(o.doc), price = base0 == null ? null : o.doc.dr ? base0 * 1.5 : base0, l = LINT ? LINT.lint(o.doc, { rps: +doc.scenario.base || 1000 }) : null;   /* DR: warm standby at half size, as in the cost plan */
+      const svc = o.doc.nodes.filter((n) => !["source", "passive"].includes((S.BY_ID[n.type] || {}).cls)).length;
+      return `<article class="${o.key === rec ? "rec" : ""}"><header><b>${o.key}. ${esc(o.name)}</b><span>${o.key === rec ? "fits your requirements" : ""}</span></header>
+        <p>${esc(o.note)}</p>
+        <div class="cost-range">${price == null ? "—" : money(price)}<small>/month estimate at the canvas traffic${o.doc.dr ? `, including a warm standby region (${money(base0)} without it)` : ""}</small></div>
+        <dl><dt>Components</dt><dd>${o.doc.nodes.length} (${svc} running services and stores)</dd><dt>Blocking findings</dt><dd>${l ? l.blocking : "—"} · ${l ? l.findings.length : "—"} total</dd><dt>Changes from your canvas</dt><dd>${o.changes.length ? `<ul>${o.changes.slice(0, 8).map((c) => `<li>${esc(c)}</li>`).join("")}${o.changes.length > 8 ? `<li class="muted">and ${o.changes.length - 8} more</li>` : ""}</ul>` : "None: your canvas already matches this option."}</dd></dl>
+        <div class="btnrow"><button class="primary-sm" type="button" data-opt-apply="${o.key}">Preview and apply</button></div></article>`;
+    }).join("");
+    const st = STU ? STU.recommendStyle(doc) : null;
+    const styleCard = st ? `<section class="opt-style"><h3>Architecture style: ${esc(st.style)}</h3><p>MVP: <b>${st.mvpServices}</b> deployable service${st.mvpServices === 1 ? "" : "s"} · scale stage: <b>${st.scaleServices}</b> · drawn now: <b>${st.drawnServices}</b> · confidence ${Math.round(st.confidence * 100)}%</p><ul>${st.why.map((x) => `<li>${esc(x)}</li>`).join("")}</ul><p class="muted">Based on: ${esc(st.basis.join("; "))}. Risk if wrong: ${esc(st.riskIfWrong)}</p>
+      <details><summary>Alternatives, and when to split a service out</summary><ul>${st.alternatives.map((a) => `<li><b>${esc(a.name)}</b>: when ${esc(a.when)}. Trade-off: ${esc(a.tradeoff)}.</li>`).join("")}</ul><p><b>Split only when:</b> ${esc(st.splitWhen.join(" / "))}</p><p><b>Validate:</b> ${esc(st.validate.join(" "))}</p></details>
+      ${st.simplify.length >= 2 ? `<div class="btnrow"><button type="button" data-opt-simplify="1">Simplify: merge ${st.simplify.length} services into a modular monolith…</button></div>` : ""}</section>` : "";
+    body.innerHTML = `<p class="cost-note">Three versions of <b>your</b> canvas, built by the same rules as Checks and priced by the same model as the cost plan. Nothing changes until you preview one and press Apply. Each applied option stays fully editable.</p>${styleCard}
+      <div class="cost-opts">${cards}</div>
+      <div class="btnrow change-actions"><button type="button" data-opt-save="1">Save all three as versions (to compare later)</button></div>`;
+  }
+  function optionAction(t) {
+    if (!optCache) return;
+    if (t.dataset.optApply) { const o = optCache.find((x) => x.key === t.dataset.optApply); if (!o) return; $("#optDlg").close(); previewChange({ title: "Option " + o.key + ": " + o.name, next: o.doc, benefits: [o.note], risks: ["Generated from rules, not from an AI model: check names, sizes and wiring before building."], changesList: o.changes, onApply: () => { useDocument(JSON.parse(JSON.stringify(o.doc)), true); say("Applied option " + o.key + ". Undo brings your previous canvas back."); } }); return; }
+    if (t.dataset.optSave) { const list = loadVersions(); optCache.slice().reverse().forEach((o) => { const full = JSON.parse(JSON.stringify(o.doc)); list.unshift({ id: "v" + Date.now().toString(36) + o.key, name: "Option " + o.key + " · " + o.name, at: new Date().toISOString(), hash: DF.hash(docCore(full)), cost: priceOf(full), blocking: LINT ? LINT.lint(full, { rps: +doc.scenario.base || 1000 }).blocking : null, doc: full }); }); if (storeVersions(list)) say("Saved the three options as versions. Open Versions to compare or restore them."); }
+  }
+  // ---- Simulation Lab: named scenarios with what-if controls; every fix goes through the preview.
+  let simW = { trafficMult: 1, aiMult: 1, off: "", slow: "", target: "", avail: "", budget: "" }, simRes = null, simKey = "";
+  const simWhatIf = () => ({ trafficMult: +simW.trafficMult || 1, aiMult: simW.aiMult === "" ? 1 : +simW.aiMult, off: simW.off && node(simW.off) ? [simW.off] : [], slow: simW.slow && node(simW.slow) ? [simW.slow] : [], target: simW.target && node(simW.target) ? simW.target : undefined, avail: simW.avail ? +simW.avail : undefined, budget: simW.budget ? +simW.budget : undefined });
+  const simFingerprint = () => DF.hash(docCore(doc)) + JSON.stringify(simW);
+  function runSimLab(force) {
+    if (!SCN) return null;
+    const k = simFingerprint(); if (!force && simRes && simKey === k) return simRes;
+    simRes = SCN.runAll(doc, simWhatIf()); simKey = k; paintSimPill(); return simRes;
+  }
+  function paintSimPill() {
+    const p = $("#simPill"); if (!p || !doc) return;
+    if (!simRes) { p.textContent = ""; return; }
+    const stale = simKey !== simFingerprint(); p.textContent = stale ? "re-run" : simRes.score + "/100"; p.className = stale ? "" : simRes.fail ? "warn" : "ok";
+  }
+  function simCard(x) {
+    const V = { Pass: "ok", Degraded: "warn", Fail: "bad", "N/A": "na" }[x.verdict] || "na", m = x.metrics, pc = (v) => (v * 100).toFixed(2) + "%";
+    const tiles = m ? [["Availability", pc(m.availability)], ["Lowest", pc(m.minOk)], ["p95", Math.round(m.p95) + " ms"], ["Errors", pc(m.errorRate)], ["Peak", num(m.peakRps) + " req/s"], m.queueDepth ? ["Queue depth", num(m.queueDepth)] : null, m.dbLoad ? ["DB load", Math.round(m.dbLoad * 100) + "%"] : null, m.cacheHit != null ? ["Cache hit", Math.round(m.cacheHit * 100) + "%"] : null, ["Cloud", money(m.cost) + "/mo"], x.ai && x.ai.monthly ? ["AI tokens", money(x.ai.monthly) + "/mo"] : null, ["Error budget", Math.round(m.budgetUsed * 100) + "% used"]].filter(Boolean) : [];
+    const li = (arr) => arr.map((s) => `<li>${esc(s)}</li>`).join("");
+    const canFix = (x.patch && x.patch.changes.length) || (FX && x.fixIds && x.fixIds.length && FX.applyAll(doc, [...new Set(x.fixIds)], reqOpts()).changes.length);   // no button when every fix is already in place
+    return `<article class="sim-card ${V}"><header><span class="sim-v ${V}">${esc(x.verdict)}</span><b>${esc(x.name)}</b><small>${esc(x.basis || "")}</small></header>
+      <p>${esc(x.summary || "")}</p>
+      ${tiles.length ? `<div class="sim-tiles">${tiles.map(([k, v]) => `<span><small>${esc(k)}</small><b>${esc(v)}</b></span>`).join("")}</div>` : ""}
+      ${m && m.bottlenecks.length ? `<p class="sim-k"><b>Bottlenecks</b> ${esc(m.bottlenecks.map((b) => b.down ? b.name + " (down)" : `${b.name} ${Math.round(b.util * 100)}%`).join(", "))}</p>` : ""}
+      ${x.alerts ? `<p class="sim-k"><b>Alerts fired</b> ${x.alerts.length ? esc(x.alerts.join(" · ")) : "none"}${x.alertNote ? ` <small>${esc(x.alertNote)}</small>` : ""}</p>` : ""}
+      ${x.failover && x.failover.length ? `<p class="sim-k"><b>Failover path</b> ${esc(x.failover.join(" · "))}</p>` : ""}
+      ${x.checks ? `<ul class="sim-checks">${x.checks.map((c) => `<li class="${c.ok ? "ok" : "bad"}">${c.ok ? "✓" : "✖"} ${esc(c.c)}</li>`).join("")}</ul>` : ""}
+      ${x.rows ? `<table class="cost-table"><thead><tr><th>Store</th><th>RPO</th><th>RTO</th></tr></thead><tbody>${x.rows.map((r) => `<tr><td>${esc(r.name)}</td><td>${esc(r.rpo)}</td><td>${esc(r.rto)}</td></tr>`).join("")}</tbody></table>` : ""}
+      ${x.notes && x.notes.length ? `<ul class="sim-notes">${li(x.notes)}</ul>` : ""}
+      <div class="btnrow">${x.live ? `<button type="button" data-sim-play="${x.key}">▶ Play on canvas</button>` : ""}${x.path && x.path.length ? `<button type="button" data-sim-path="${x.key}">Show on canvas</button>` : ""}${canFix ? `<button type="button" class="${x.verdict === "Pass" ? "" : "primary-sm"}" data-sim-fix="${x.key}">${x.verdict === "Pass" ? "Improve…" : "Preview fix…"}</button>` : ""}</div></article>`;
+  }
+  function renderSimLab() {
+    const body = $("#simBody"); if (!body) return;
+    if (!SCN) { body.innerHTML = `<p class="muted">The simulation module did not load.</p>`; return; }
+    const r = runSimLab(), opts = doc.nodes.filter((n) => !["source", "passive"].includes(S.BY_ID[n.type].cls)).map((n) => [n.id, n.props.name || S.BY_ID[n.type].name]);
+    const pick = (k, label, hint) => `<label title="${esc(hint)}">${label} <select data-simw="${k}"><option value="">—</option>${opts.map(([id, nm]) => `<option value="${esc(id)}" ${simW[k] === id ? "selected" : ""}>${esc(nm)}</option>`).join("")}</select></label>`;
+    const groups = [...new Set(SCN.LIST.map((s) => s.group))];
+    body.innerHTML = `
+      <p class="cost-note">Traffic and failure scenarios run the simulator for one hour (incidents from minute 15 to 30) with its <b>teaching numbers</b>. Security and AI scenarios check the <b>paths drawn on the canvas</b>. A Pass here means the design survives the model, not that it is production-proven: confirm with real load, chaos and security tests (readiness level 3).</p>
+      <section class="cost-inputs" aria-label="What-if controls"><b>What if</b>
+        <label>Traffic <input type="range" min="0.25" max="10" step="0.25" value="${simW.trafficMult}" data-simw="trafficMult"><output>${simW.trafficMult}×</output></label>
+        <label>AI requests <input type="range" min="0" max="10" step="0.5" value="${simW.aiMult}" data-simw="aiMult"><output>${simW.aiMult}×</output></label>
+        <label>Availability goal <select data-simw="avail"><option value="">canvas (${doc.slo.avail}%)</option>${[99, 99.5, 99.9, 99.95, 99.99].map((v) => `<option value="${v}" ${String(simW.avail) === String(v) ? "selected" : ""}>${v}%</option>`).join("")}</select></label>
+        <label>Budget $/mo <input type="number" min="0" step="100" data-simw="budget" value="${esc(simW.budget)}" placeholder="${esc(doc.slo.budget)}"></label>
+        ${pick("off", "Turn off", "This box is down for the whole hour in every scenario")}${pick("slow", "Add latency to", "This box is 4× slower with 40% capacity for the whole hour")}${pick("target", "Fail in outage tests", "Which service the slow-service and outage scenarios hit (default: the busiest)")}
+        <button type="button" class="primary-sm" data-sim-run="1">Re-run all</button>
+        <small class="muted">To change a component's provider or region, select it on the canvas (Swap / Region); the next run uses it.</small></section>
+      <div class="sim-summary"><div class="ready-score"><b>${r.score}</b><span>/100 scenario score</span></div><span class="sim-v ok">${r.pass} pass</span><span class="sim-v warn">${r.degraded} degraded</span><span class="sim-v bad">${r.fail} fail</span><span class="sim-v na">${r.na} not applicable</span></div>
+      ${groups.map((g) => `<h3>${esc(g)}</h3><div class="sim-grid">${r.results.filter((x) => x.group === g).map(simCard).join("")}</div>`).join("")}
+      <p class="cost-foot">Deterministic: the same canvas and what-if settings always give the same results. Fingerprint <code>${esc(DF.hash(docCore(doc)))}</code>.</p>`;
+  }
+  function simAction(t) {
+    if (t.dataset.simRun) { runSimLab(true); return renderSimLab(); }
+    const key = t.dataset.simPlay || t.dataset.simPath || t.dataset.simFix, x = simRes && simRes.results.find((r) => r.key === key); if (!x) return;
+    $("#simDlg").close();
+    if (t.dataset.simPlay) {
+      stop(); chaos = {}; simWhatIf().off.forEach((id) => { down[id] = true; }); simWhatIf().slow.forEach((id) => { chaos["slow:" + id] = true; });
+      const keys = x.live.chaos || [], short = keys.length && keys.every((k) => k === "dbDown" || k === "cacheFlush");
+      // same timing as the scenario, compressed: 3 simulated minutes of normal traffic, the fault, then recovery
+      playScript = keys.length ? { name: x.name, keys, from: 6, to: short ? 8 : 36, end: short ? 50 : 70 } : null;
+      mult = x.live.mult || +simW.trafficMult || 1; $("#mult").value = Math.min(5, mult); $("#multOut").textContent = mult + "×";
+      highlight = new Set(x.path || []); start(); paintChaos();
+      say(`Playing “${x.name}” on the canvas: watch box load, failures and flows. ■ stops it.`); return;
+    }
+    if (t.dataset.simPath) { highlight = new Set(x.path); sel = { node: null, edge: null }; render(); say(`Showing the path for “${x.name}”. Click empty canvas or press Esc to clear.`); return; }
+    let d = x.patch ? x.patch.doc : doc; const changes = x.patch ? x.patch.changes.slice() : [];
+    if (FX && x.fixIds && x.fixIds.length) { const r2 = FX.applyAll(d, [...new Set(x.fixIds)], reqOpts()); d = r2.doc; changes.push(...r2.changes); }
+    fixPreview("Fix for scenario: " + x.name, { doc: d, changes }, x.summary);
+  }
+  // ---- Export: design documents generated from the canvas
+  let exportPreview = "";
+  function exportCtx() {
+    const plan = C ? C.plan({ nodes: doc.nodes, edges: doc.edges, scenario: doc.scenario, slo: doc.slo, requirements: doc.requirements }, costOpts) : null;
+    return { doc, lint: lintNow(), plan: plan && !plan.error ? plan : null, scen: runSimLab(), reqState: RQ ? RQ.state(doc) : null, style: STU ? STU.recommendStyle(doc) : null, docs: DOCS.D || {}, hash: DF.hash(docCore(doc)), stamp: new Date().toISOString().replace("T", " ").slice(0, 16) + " UTC" };
+  }
+  const docSlug = () => (doc.name || "architecture").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "architecture";
+  function renderExport() {
+    const body = $("#exportBody"); if (!body) return;
+    if (!EXP) { body.innerHTML = `<p class="muted">The export module did not load.</p>`; return; }
+    const h = DF.hash(docCore(doc));
+    body.innerHTML = `
+      <p class="cost-note">Every document is generated from the current canvas (fingerprint <code>${esc(h)}</code>), the recorded requirements, the checks, the cost plan and the Simulation Lab. Each value is labelled <b>on canvas</b>, <b>user-confirmed</b>, <b>recommended</b>, <b>assumed</b> or <b>unknown</b>. Regenerate after any change; the fingerprint in each file tells you which canvas it describes.</p>
+      <div class="exp-grid">${EXP.DOCS.map((d) => `<article><b>${esc(d.title)}</b><p>${esc(d.desc)}</p><div class="btnrow"><button type="button" class="primary-sm" data-exp-dl="${d.key}">Download .md</button><button type="button" data-exp-view="${d.key}">Preview</button></div></article>`).join("")}</div>
+      <div class="btnrow change-actions"><button type="button" class="primary-sm" data-exp-all="1">Download the whole package (.md)</button><button type="button" data-ready-download="1">Readiness report (.md)</button></div>
+      <h3>Project and sharing</h3>
+      <div class="btnrow"><button type="button" data-act="save">Save project file</button><button type="button" data-act="open">Open project file…</button><button type="button" data-act="saveMemory">Save to YashAI memory</button><button type="button" data-act="openMemory">Open YashAI project…</button><button type="button" data-act="share">Copy share link</button><button type="button" data-act="prompt">Copy coding-agent prompt</button></div>
+      ${exportPreview ? `<h3>Preview</h3><pre class="exp-pre">${esc(exportPreview)}</pre>` : ""}`;
+  }
+  function exportAction(t) {
+    const ctx = exportCtx();
+    if (t.dataset.expAll) { download(EXP.all(ctx), `${docSlug()}-architecture-package-${ctx.hash}.md`, "text/markdown"); say("Downloaded the full architecture package for fingerprint " + ctx.hash + "."); return; }
+    const key = t.dataset.expDl || t.dataset.expView, md = EXP.generate(key, ctx);
+    if (t.dataset.expDl) { download(md, `${docSlug()}-${key}-${ctx.hash}.md`, "text/markdown"); say("Downloaded " + (EXP.DOCS.find((d) => d.key === key) || {}).title + "."); return; }
+    exportPreview = md; renderExport(); const pre = $("#exportBody .exp-pre"); if (pre) pre.scrollIntoView({ block: "start" });
+  }
+  // The settings people actually change, in the Inspect panel (Real Play hides the classic side inspector).
+  function settingsHtml(n) {
+    const d = S.BY_ID[n.type] || {}, p = n.props, c = d.cls, rows = [];
+    const row = (label, input, hint) => rows.push(`<div class="set-row"><label>${label}${hint ? `<small>${hint}</small>` : ""}</label>${input}</div>`);
+    if (["router", "proxy", "service"].includes(c)) row("Instances", numIn("inst", p.inst || 1, 1, 200), `Each handles about ${num(d.cap || 0)} req/s`);
+    if (["proxy", "service"].includes(c)) row("Autoscaling", tog("auto", p.auto), "Adds instances under load");
+    if (c === "router") row("High availability", tog("ha", p.ha), "Survives one load balancer failing");
+    if (c === "cache") { row("Nodes", numIn("inst", p.inst || 1, 1, 24)); row("Hit rate", `<input type="number" data-p="hit" value="${p.hit == null ? d.hit : p.hit}" min="0" max="1" step="0.05">`, "Share of reads answered from the cache"); }
+    if (c === "queue") row("Workers", numIn("workers", p.workers || 1, 1, 200), `Each drains about ${num(d.cap || 0)} msg/s`);
+    if (c === "db") { row("Read replicas", numIn("replicas", p.replicas || 0, 0, 8), "Extra copies that serve reads"); row("Automatic failover", tog("ha", p.ha), "A standby takes over if it fails"); row("Shards", numIn("shards", p.shards || 1, 1, 32), skill === "beginner" ? "Split the data over several databases: more writes per second" : "Each shard takes its own writes"); }
+    if (c === "limiter" && !d.waf) row("Limit (req/s)", numIn("limit", p.limit || d.cap, 1, 10000000, 100));
+    if (c === "external") row("Calls per request", `<input type="number" data-p="ratio" value="${p.ratio == null ? 0.1 : p.ratio}" min="0" max="1" step="0.05">`, "Share of requests that call it");
+    if (c === "source") row("Share of traffic", numIn("share", p.share == null ? 1 : p.share, 0, 100, 0.5));
+    if (["proxy", "service"].includes(c) && skill !== "beginner") { row("Retries", numIn("retries", p.retries || 0, 0, 5)); row("Timeout (ms)", numIn("timeout", p.timeout || 1000, 10, 60000, 10)); row("Circuit breaker", tog("breaker", p.breaker), "Stops calling a failing dependency"); }
+    if (!rows.length) return "";
+    return `<h4>Settings</h4>${loadNote(n)}<div class="set-grid">${rows.join("")}</div>`;
+  }
+  function loadNote(n) {
+    const u = lastRec && lastRec.nodes[n.id];
+    const busy = u && S.BY_ID[n.type].cls !== "source" ? Math.round(u.util * 100) : null;
+    if (u && u.down) return `<p class="set-load bad"><b>Down</b> Not answering right now. Automatic failover brings a standby up in seconds; read replicas keep reads working meanwhile.</p>`;
+    const pk = Math.round(peakUtil(n.id) * 100);
+    if (busy != null && pk >= 100 && pk > busy + 5) return `<p class="set-load bad"><b>${busy}% busy now, ${pk}% at the peak</b> When traffic peaks this box is overloaded and requests are dropped. Raise its capacity until the peak stays under 100%.</p>`;
+    return busy == null ? "" : `<p class="set-load ${busy > 100 ? "bad" : busy > 70 ? "warn" : "ok"}"><b>${busy}% busy</b> ${busy > 100 ? "Overloaded: requests are dropped. Raise Instances (or add a cache in front)." : busy > 70 ? "Getting busy: little headroom left." : "Healthy."}</p>`;
+  }
+  function explainHtml(n) {
+    const d = S.BY_ID[n.type] || {}, nm = (id) => { const x = node(id); return x ? esc(x.props.name || S.BY_ID[x.type].name) : id; };
+    const info = ALTS && ALTS.info(n.type), lint = lintNow(), mine = lint ? lint.findings.map((f, i) => [f, i]).filter(([f]) => f.nodes.includes(n.id)) : [];
+    let est = null; try { const r = C && C.sizeAndPrice(graphForSim(), doc.scenario, (+doc.scenario.base || 1000) * costOpts.trafficMult, "asis", false); est = r && r.rows && r.rows[n.id]; } catch (e) { /* not sizable */ }
+    const outs = doc.edges.filter((e) => e.from === n.id).map((e) => nm(e.to)), ins = doc.edges.filter((e) => e.to === n.id).map((e) => nm(e.from));
+    const alts = info ? info.alts.slice(0, 4).map((a) => { const ad = S.BY_ID[a.id] || {}; return `<li><b>${esc(ad.name || a.id)}</b>${ad.cost != null && d.cost ? ` <small>${ad.cost < d.cost ? "cheaper" : ad.cost > d.cost ? "pricier" : "similar price"}</small>` : ""}<span>Pick it when ${esc(a.pick)}.</span></li>`; }).join("") : "";
+    return `<header><b>${esc(n.props.name || d.name)}</b><span>${esc(d.name)} · L${n.props.__aiLevel || 1}</span><button type="button" id="wirePanelClose" aria-label="Close panel">&times;</button></header><div class="wire-panel-body explain">
+      <p>${esc((DOCS.D || {})[n.type] || "No description yet.")}</p>
+      ${info ? `<p class="ex-pick"><b>Best when</b> ${esc(info.pick)}.</p><p class="ex-avoid"><b>Not a fit when</b> ${esc(info.avoid)}.</p>` : ""}
+      <p class="ex-cost"><b>Estimate:</b> ${est ? money(est.cost) + "/month" + (est.need != null ? ` · ${est.inst} instance${est.inst === 1 ? "" : "s"} at the canvas traffic` : "") : "—"} <small>(teaching price)</small></p>
+      ${settingsHtml(n)}
+      <p><b>Calls:</b> ${outs.join(", ") || "nothing"}<br><b>Called by:</b> ${ins.join(", ") || "nothing"}</p>
+      ${mine.length ? `<h4>Findings here (${mine.length})</h4><ul class="ex-findings">${mine.map(([f, i]) => `<li class="${f.sev}"><span class="lint-sev ${f.sev}">${esc(f.sev)}</span> ${esc(f.title)}${FX && FX.canFix(f) ? ` <button type="button" data-lint-fix="${i}">Fix…</button>` : ""}</li>`).join("")}</ul>` : `<p class="muted">No findings involve this component.</p>`}
+      ${alts ? `<h4>Alternatives</h4><ul class="ex-alts">${alts}</ul>` : ""}
+      <div class="ex-tools">${aiWorkspace && Number(n.props.__aiLevel || 1) < 3 ? `<button type="button" class="primary-sm" data-drill="${esc(n.id)}" title="Or double-click the box">Open internals (Level ${Number(n.props.__aiLevel || 1) + 1})</button>` : ""}<button type="button" data-pt="locked" data-v="${n.props.locked ? 0 : 1}">${n.props.locked ? "🔓 Unlock" : "🔒 Lock"}</button><button type="button" data-act="dup">Duplicate</button><button type="button" class="danger" data-act="delNode">Delete</button></div>
+      <label class="ex-comment"><b>Comment</b><textarea data-pc="comment" rows="2" maxlength="500" placeholder="Decision, open question or TODO for this box">${esc(n.props.comment || "")}</textarea></label></div>`;
+  }
+  const LINT = window.LabLint, SEV_LABEL = { critical: "Critical", high: "High", medium: "Medium", low: "Low", info: "Note" };
+  const CAT_LABEL = { security: "Security", reliability: "Reliability", operations: "Operations", data: "Data", cost: "Cost", ai: "AI safety", compliance: "Compliance" };
+  function lintNow() { return LINT && doc ? LINT.lint(doc, { rps: +doc.scenario.base || 1000, monthlyCost: costLast }) : null; }
+  function paintLintPill() {
+    const pill = $("#lintPill"), btn = $("#lintBtn"); if (!pill || !btn) return;
+    const r = lintNow(); if (!r) { pill.textContent = ""; return; }
+    const c = r.counts, worst = c.critical ? "critical" : c.high ? "high" : c.medium ? "medium" : "ok";
+    btn.dataset.worst = worst;
+    pill.textContent = c.critical + c.high ? `${c.critical + c.high} blocking` : c.medium + c.low ? `${c.medium + c.low} to review` : "clear";
+  }
+  function renderChecks() {
+    const body = $("#lintBody"); if (!body) return;
+    const r = lintNow(); if (!r) { body.innerHTML = `<p class="muted">The checks module did not load.</p>`; return; }
+    const comp = new Set((doc.requirements || {}).compliance || []);
+    const fw = [["gdpr", "GDPR"], ["hipaa", "HIPAA"], ["pci", "PCI DSS"], ["soc2", "SOC 2"], ["iso27001", "ISO 27001"]], none = !!(doc.requirements || {}).complianceNone;
+    const c = r.counts;
+    body.innerHTML = `
+      <p class="cost-note">Rules run on everything drawn on this canvas, every level included, and update after each change. A finding marked <b>not on canvas</b> means the control may exist but is not drawn, so it is unknown. References name the standard each rule comes from; passing these checks is a design review step, not a certification.</p>
+      <section class="cost-inputs" aria-label="Compliance needs"><b>Compliance needs</b>${fw.map(([k, l]) => `<button type="button" class="lint-fw" data-compliance="${k}" aria-pressed="${comp.has(k)}">${l}</button>`).join("")}<button type="button" class="lint-fw" data-compliance="none" aria-pressed="${none}">None apply</button><small class="muted">Your answer is treated as user-confirmed.</small></section>
+      <div class="lint-counts">${["critical", "high", "medium", "low", "info"].map((k) => `<span class="lint-sev ${k}">${c[k]} ${SEV_LABEL[k]}</span>`).join("")}</div>
+      ${FX ? `<div class="lint-actions">${r.blocking ? `<button class="primary-sm" type="button" data-lint-fix-all="1">Fix all blocking…</button>` : ""}<span>Optimize for</span>${["security", "reliability", "cost", "compliance"].map((g) => `<button type="button" data-optimize="${g}">${g[0].toUpperCase() + g.slice(1)}…</button>`).join("")}<small class="muted">Every fix opens a preview first.</small></div>` : ""}
+      ${r.findings.length ? `<ol class="lint-list">${r.findings.map((f) => `<li class="lint-item ${f.sev}">
+        <header><span class="lint-sev ${f.sev}">${SEV_LABEL[f.sev]}</span><span class="lint-cat">${esc(CAT_LABEL[f.cat] || f.cat)}</span><b>${esc(f.title)}</b></header>
+        <p>${esc(f.detail)}</p>
+        <p class="lint-fix"><b>Fix:</b> ${esc(f.fix)}</p>
+        <p class="lint-meta">Reference: ${esc(f.ref)} · Basis: ${esc(f.basis)} · Confidence ${Math.round(f.confidence * 100)}%</p>
+        <div class="lint-nodes">${FX && FX.canFix(f) ? `<button type="button" class="primary-sm" data-lint-fix="${r.findings.indexOf(f)}">Fix…</button>` : ""}${[...new Set(f.nodes)].slice(0, 6).map((id) => node(id) ? `<button type="button" data-lint-focus="${esc(id)}">Show ${esc(node(id).props.name || S.BY_ID[node(id).type].name)}</button>` : "").join("")}</div>
+      </li>`).join("")}</ol>` : `<p class="muted">No findings. That means these rules found nothing, not that the design is safe: run the simulations and a human review next.</p>`}`;
+  }
+  function renderCostPlan() {
+    const body = $("#costBody"); if (!body) return;
+    if (!C) { body.innerHTML = `<p class="muted">The cost module did not load.</p>`; return; }
+    const rq = doc.requirements || {}, rc = rq.confirmed || {}, reqKey = JSON.stringify([rq, rc]);
+    // confirmed requirements seed the what-if inputs once; after that the user's changes here stick
+    if (reqKey !== costSeededFrom) {
+      costSeededFrom = reqKey;
+      if (rc.cloud) costOpts.provider = rq.cloud === "any" ? "generic" : rq.cloud;
+      if (rc.users12m || rc.usersLaunch) costOpts.users = +(rq.users12m || rq.usersLaunch) || 0;
+      if (rc.priority) costOpts.priority = rq.priority === "speed" ? "lowest" : rq.priority;
+      if (rc.availability) costOpts.uptime = +rq.availability;
+      if (rc.environments) costOpts.envs = { staging: rq.environments !== "prod", dev: rq.environments === "full" };
+    }
+    const p = C.plan({ nodes: doc.nodes, edges: doc.edges, scenario: doc.scenario, slo: doc.slo, requirements: doc.requirements }, costOpts);
+    if (p.error) { body.innerHTML = `<p class="cost-note bad">${esc(p.error)}</p>`; return; }
+    const m = (x) => (x == null ? "—" : money(x)), budget = p.budget, over = (x) => (budget > 0 && x > budget ? "over" : "");
+    const opt = (k, v, label) => `<option value="${v}" ${String(costOpts[k]) === String(v) ? "selected" : ""}>${label}</option>`;
+    const sevIcon = { bad: "✖", warn: "▲", info: "●" };
+    const lv = (c) => `<span class="cost-lv l${c.level}">L${c.level}</span>`;
+    body.innerHTML = `
+      <p class="cost-note">Estimates for learning trade-offs, built from the simulator's teaching price list and its own load figures. <b>Not provider quotes</b>: no live ${esc(p.provider.toUpperCase())} pricing was checked. Validate with the provider's pricing calculator and a load test before committing to a budget.</p>
+      <section class="cost-inputs" aria-label="What-if inputs">
+        <label>Provider <select data-cost-opt="provider">${opt("provider", "aws", "AWS")}${opt("provider", "azure", "Azure")}${opt("provider", "gcp", "Google Cloud")}${opt("provider", "generic", "Any / self-hosted")}</select></label>
+        <label>Priority <select data-cost-opt="priority">${opt("priority", "lowest", "Lowest cost")}${opt("priority", "balanced", "Balanced")}${opt("priority", "performance", "High performance")}${opt("priority", "ha", "High availability")}</select></label>
+        <label>Uptime goal <select data-cost-opt="uptime">${opt("uptime", 99.5, "99.5%")}${opt("uptime", 99.9, "99.9%")}${opt("uptime", 99.95, "99.95%")}${opt("uptime", 99.99, "99.99%")}</select></label>
+        <label>Traffic <input type="range" min="0.1" max="10" step="0.1" value="${costOpts.trafficMult}" data-cost-opt="trafficMult"><output>${costOpts.trafficMult}× · ${num(p.base)} req/s</output></label>
+        <label>Users <input type="number" min="0" step="100" value="${costOpts.users || ""}" placeholder="optional" data-cost-opt="users"></label>
+        <label class="chk"><input type="checkbox" data-cost-env="staging" ${costOpts.envs.staging ? "checked" : ""}> Staging</label>
+        <label class="chk"><input type="checkbox" data-cost-env="dev" ${costOpts.envs.dev ? "checked" : ""}> Dev</label>
+      </section>
+      <p class="cost-sub">Priority and uptime choose the recommended option below. Every provider is priced from the same teaching price list, so totals only change with traffic, environments and the design itself.</p>
+      <h3>Monthly budget by scenario <small>${p.components.length} components across level${p.levels.length > 1 ? "s" : ""} ${p.levels.join(", ")} · budget ${budget ? money(budget) : "not set"}</small></h3>
+      <div class="cost-scen">${p.scenarios.map((s) => `<div class="${over(s.total)}"><span>${esc(s.name)}</span><b>${s.key === "proto" ? "≈$0 cloud" : m(s.total)}</b><small>${s.rps ? num(s.rps) + " req/s · " : ""}${esc(s.note)}</small></div>`).join("")}</div>
+      <p class="cost-sub">All environments (production${costOpts.envs.staging ? " + staging" : ""}${costOpts.envs.dev ? " + dev" : ""}): <b>${m(p.envTotal)}/month</b> · about <b>${p.perMillion < 1 ? "under $1" : money(p.perMillion)}</b> per million requests${p.perUser != null ? ` · <b>$${p.perUser.toFixed(2)}</b> per user per month` : ""}. Staging and dev are assumed at 50% and 25% of the MVP size.</p>
+      <h3>Three options</h3>
+      <div class="cost-opts">${p.options.map((o) => `<article class="${o.key === p.recommended ? "rec" : ""}"><header><b>${o.key}. ${esc(o.name)}</b><span>${esc(o.tag)}${o.key === p.recommended ? " · fits your inputs" : ""}</span></header>
+        <div class="cost-range">${m(o.low)} – ${m(o.high)}<small>/month, expected → peak traffic</small></div>
+        <dl><dt>Changes</dt><dd>${esc(o.changes)}</dd><dt>Services</dt><dd>${o.services}</dd><dt>Ops complexity</dt><dd>${esc(o.complexity)}</dd><dt>Availability in the incident drill</dt><dd>${(o.availability * 100).toFixed(2)}% · p95 ${num(o.p95)} ms</dd><dt>Recovery</dt><dd>${esc(o.recovery)}</dd><dt>Security / compliance</dt><dd>${esc(o.security)}</dd><dt>Upgrade path</dt><dd>${esc(o.upgrade)}</dd><dt>Risks</dt><dd>${esc(o.risks)}</dd></dl></article>`).join("")}</div>
+      ${(() => { const costF = p.lint.filter((x) => x.cat === "cost"), other = p.lint.length - costF.length; return `<h3>Cost checks <small>${costF.length || "no"} finding${costF.length === 1 ? "" : "s"}${other ? ` · ${other} security, reliability and AI finding${other === 1 ? "" : "s"} are under Checks` : ""}</small></h3>
+      ${costF.length ? `<ul class="cost-lint">${costF.map((x) => `<li class="${x.sev === "high" || x.sev === "critical" ? "bad" : x.sev === "info" ? "info" : "warn"}"><i>${sevIcon[x.sev === "high" || x.sev === "critical" ? "bad" : x.sev === "info" ? "info" : "warn"]}</i><span><b>${esc(x.title)}.</b> ${esc(x.detail)} ${esc(x.fix)}</span></li>`).join("")}</ul>` : `<p class="muted">No over-building, unused parts, egress hot spots or budget overrun found by these rules.</p>`}`; })()}
+      <h3>Every component <small>sized at 70% utilisation · DR adds a half-size standby</small></h3>
+      <div class="cost-table-wrap"><table class="cost-table"><thead><tr><th>Component</th><th>Level</th><th>Main driver</th><th>Billing</th><th>Basis</th><th>MVP</th><th>Expected</th><th>Peak</th><th>DR</th></tr></thead><tbody>
+        ${p.components.map((c) => `<tr><td><b>${esc(c.name)}</b><small>${esc(c.type)}${c.parent ? " · inside " + esc(c.parent) : ""}${c.need != null ? " · " + c.inst + " instance" + (c.inst === 1 ? "" : "s") : ""}</small></td><td>${lv(c)}</td><td>${esc(c.driver)}</td><td>${esc(c.billing)}</td><td>${esc(c.basis)}</td><td>${m(c.mvp)}</td><td>${m(c.growth)}</td><td>${m(c.peak)}</td><td>${m(c.dr)}</td></tr>`).join("")}
+      </tbody><tfoot><tr><td colspan="5">Total</td><td>${m(p.totals.mvp)}</td><td>${m(p.totals.growth)}</td><td>${m(p.totals.peak)}</td><td>${m(p.totals.dr)}</td></tr></tfoot></table></div>
+      ${p.levels.length > 1 ? `<p class="cost-sub">Level 2 and 3 parts are priced as drawn. If a detail box is just a zoom-in on its parent (not extra infrastructure), remove one of the two before trusting the total.</p>` : ""}
+      <h3>Cheaper alternatives <small>${p.alternatives.length} expensive or heavyweight choice${p.alternatives.length === 1 ? "" : "s"}</small></h3>
+      ${p.alternatives.length ? `<div class="cost-table-wrap"><table class="cost-table alts"><thead><tr><th>Component</th><th>Current choice</th><th>Monthly est.</th><th>Lower-cost alternative</th><th>Trade-off</th><th>When to upgrade</th></tr></thead><tbody>
+        ${p.alternatives.map((a) => `<tr><td><b>${esc(a.name)}</b></td><td>${esc(a.current)}</td><td>${m(a.cost)}</td><td>${esc(a.alt)}${a.altCost != null ? `<small>≈${m(a.altCost)}</small>` : ""}</td><td>${esc(a.trade)}</td><td>${esc(a.when)}</td></tr>`).join("")}
+      </tbody></table></div>` : `<p class="muted">Nothing on this canvas is expensive enough to need a cheaper stand-in.</p>`}
+      <h3>Hidden costs not in these totals</h3>
+      <ul class="cost-hidden">${p.hidden.sort((a, b) => b.on - a.on).map((h) => `<li class="${h.on ? "on" : ""}"><b>${esc(h.item)}</b>${h.on ? " <em>applies to this design</em>" : ""}<span>${esc(h.why)}</span></li>`).join("")}</ul>
+      <h3>Cost controls to set up</h3>
+      <ul class="cost-controls">
+        <li><b>Budget alerts</b> at 50%, 80% and 100% of ${budget ? money(budget) : "your monthly budget"}, plus a forecast alert.</li>
+        <li><b>Quotas and limits</b>: maximum autoscaling instances per service, per-tenant request quotas, and a hard spend cap for sandbox accounts.</li>
+        <li><b>Anomaly detection</b> on daily spend per service and per tenant.</li>
+        ${p.aiNodes ? `<li><b>AI protections</b>: token budget per user and per tenant, route easy requests to a small model, semantic cache, batch non-urgent jobs, cap response length and retrieved chunks, rate limits, and a token-usage dashboard.</li>` : ""}
+        <li><b>FinOps tags on every resource</b>: product, environment, team, owner, cost-center, customer/tenant, expiration-date.</li>
+      </ul>
+      <p class="cost-foot">Source: Architecture Lab teaching price list (sim.js), sized by the in-browser simulator · calculated ${new Date().toLocaleString()} · confidence: low until checked against ${esc(p.provider === "generic" ? "your hosting provider" : p.provider.toUpperCase())} pricing. Ready for the next validation step, not a quote.</p>`;
+  }
+  (function costWiring() {
+    const body = $("#costBody"); if (!body) return;
+    const onInput = (e) => {
+      const t = e.target;
+      if (t.dataset.costOpt) {
+        const k = t.dataset.costOpt;
+        costOpts[k] = ["trafficMult", "uptime", "users"].includes(k) ? Math.max(0, +t.value || 0) : t.value;
+        if (k === "trafficMult") { costOpts.trafficMult = Math.max(0.1, costOpts.trafficMult); if (e.type === "input") { const o = t.nextElementSibling; if (o) o.textContent = costOpts.trafficMult + "×"; return; } }
+      } else if (t.dataset.costEnv) costOpts.envs[t.dataset.costEnv] = t.checked;
+      else return;
+      renderCostPlan(); costLast = costNow(); costDelta = 0; paintCostPill();
+    };
+    body.addEventListener("change", onInput); body.addEventListener("input", onInput);
+    $("#costPlan").addEventListener("click", (e) => { if (e.target === e.currentTarget) e.currentTarget.close(); });
+    costLast = costNow(); paintCostPill(); paintLintPill(); paintReqPill();
+    $("#lintDlg").addEventListener("click", (e) => { if (e.target === e.currentTarget) e.currentTarget.close(); });
+  })();
+  (function studioWiring() {
+    ['#simDlg', '#exportDlg'].forEach((s) => { const d = $(s); if (d) d.addEventListener("click", (e) => { if (e.target === e.currentTarget) e.currentTarget.close(); }); });
+    document.addEventListener("pointerdown", (e) => { const m = $(".chaos-menu"); if (m && m.open && !m.contains(e.target)) m.open = false; }, true);
+    const sb = $("#simBody");
+    if (sb) {
+      const onW = (e) => {
+        const t = e.target, k = t.dataset && t.dataset.simw; if (!k) return;
+        simW[k] = t.type === "range" ? +t.value : t.value;
+        if (t.type === "range") { const o = t.nextElementSibling; if (o) o.textContent = t.value + "×"; if (e.type === "input") return; }
+        renderSimLab();
+      };
+      sb.addEventListener("input", onW); sb.addEventListener("change", onW);
+    }
+    const vs = $("#viewSel");
+    if (vs) {
+      vs.innerHTML = VIEWS.map(([v, l]) => `<option value="${v}" ${viewMode === v ? "selected" : ""}>${esc(l)}</option>`).join("");
+      vs.addEventListener("change", () => { viewMode = vs.value; try { localStorage.setItem("archlab.view", viewMode); } catch (e) { /* ignore */ } render(); say(VIEWS.find((x) => x[0] === viewMode)[1] + " view. Everything stays editable."); });
+    }
+    const mm = $("#minimap");
+    if (mm) mm.addEventListener("pointerdown", (e) => {
+      e.preventDefault(); e.stopPropagation();
+      let m; try { m = JSON.parse(mm.dataset.map || "null"); } catch (x) { m = null; } if (!m) return;
+      const r = mm.getBoundingClientRect(), b = $("#board").getBoundingClientRect(), wx = m.x0 + (e.clientX - r.left - m.ox) / m.k, wy = m.y0 + (e.clientY - r.top - m.oy) / m.k;
+      view.x = b.width / 2 - wx * view.z; view.y = b.height / 2 - wy * view.z; render();
+    });
+    paintSimPill();
+  })();
   // ---- Component panel (Real Play): the full catalog (#tab-parts, already rendered and wired for
   // search + drag-to-canvas by renderParts()) normally lives inside #side, which stays hidden in the
   // AI workspace. Relocate the SAME populated element into its own persistent column instead -- next
@@ -1536,5 +2343,237 @@
     grip.addEventListener("dblclick", () => { st.w = 320; apply(); save(); });
     addEventListener("resize", () => { root.style.setProperty("--parts-w", clampW(st.w) + "px"); });
     apply();
+  })();
+  // ---- Studio shell (Real Play): one header, the design steps docked on the left, the canvas with a
+  // floating toolbar, and one tabbed panel on the right (Components / AI assistant / Inspect).
+  // ---- Skill level: Beginner sees the basic parts and the essential steps; each level adds tools.
+  function setSkill(k, quiet) {
+    skill = k || ""; try { if (k) localStorage.setItem("yashai.level", k); } catch (e) { /* ignore */ }
+    document.body.classList.remove("lvl-beginner", "lvl-intermediate", "lvl-advanced"); if (k) document.body.classList.add("lvl-" + k);
+    if (k === "beginner") provFilter = "generic"; else if (provFilter === "generic") provFilter = "all";
+    $$("[data-skill]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.skill === k)));
+    renderParts(); wirePanelKey = ""; paintGuide(); render();
+    if (!quiet && k) say({ beginner: practiceMode ? "Beginner: basic parts only, plain explanations, the essential steps." : "Beginner: basic parts only. Press ▶ Start to see traffic flow. For step-by-step help, open Learn in the left menu.", intermediate: "Intermediate: every component, trade-off tools and checks.", advanced: "Advanced: the full studio, including versions, readiness and export." }[k]);
+  }
+  function showSkillChooser() {
+    let dl = $("#skillDlg");
+    if (!dl) {
+      dl = document.createElement("dialog"); dl.id = "skillDlg"; dl.className = "skill-dialog";
+      dl.innerHTML = `<h2>How much system design do you know?</h2><p>This sets how much the studio shows. You can change it any time at the top right.</p>
+        <div class="skill-cards">
+          <button type="button" data-skill="beginner"><b>Beginner</b><span>New to this. Plain words, step-by-step help, only the basic parts (client, server, database, cache, queue…).</span></button>
+          <button type="button" data-skill="intermediate"><b>Intermediate</b><span>I know servers, databases and APIs. Show me all components, checks and cost so I can compare trade-offs.</span></button>
+          <button type="button" data-skill="advanced"><b>Advanced</b><span>I design production systems. Give me everything: failure drills, versions, readiness and exports.</span></button>
+        </div>`;
+      document.body.appendChild(dl);
+    }
+    if (!dl.open) dl.showModal();
+  }
+  // ---- Guided practice (Learn): steps built from the example's core design, checked live against the canvas.
+  let guideSum = { key: "", sum: null };
+  const nameOf = (n) => (n.props && n.props.name) || (S.BY_ID[n.type] || {}).name || n.type;
+  const an = (w) => (/^[aeio]/i.test(w) ? "an " : "a ") + w;
+  const sentence1 = (t) => String(t || "").split(/(?<=\.)\s/)[0];
+  const kindOf = (type) => { const d = S.BY_ID[type] || {}, ai = d.cat === "AI & ML"; return d.cls === "service" ? (ai ? "ai-service" : "service") : d.cls === "proxy" ? (ai ? "ai-proxy" : "proxy") : d.cls === "db" ? (ai ? "vector" : "db") : d.cls; };
+  const sameJob = (a, b) => a === b || (!!S.BY_ID[a] && !!S.BY_ID[b] && !!S.BY_ID[a].eq && S.BY_ID[a].eq === S.BY_ID[b].eq) || kindOf(a) === kindOf(b);
+  function buildGuide() {
+    const p = PRESETS.find((x) => x.id === guideId); if (!p) return null;
+    const ref = JSON.parse(JSON.stringify((p.coreBuild || p.build)())), by = {};
+    ref.nodes.forEach((n) => { by[n.id] = n; });
+    const order = [], seen = new Set(), q = ref.nodes.filter((n) => S.BY_ID[n.type].cls === "source").map((n) => n.id);
+    q.forEach((id) => seen.add(id));
+    while (q.length) { const id = q.shift(); order.push(id); ref.edges.filter((e) => e.from === id).forEach((e) => { if (!seen.has(e.to)) { seen.add(e.to); q.push(e.to); } }); }
+    ref.nodes.forEach((n) => { if (!seen.has(n.id)) order.push(n.id); });
+    const steps = [], added = new Set(), wired = new Set();
+    order.forEach((id) => {
+      const n = by[id], d = S.BY_ID[n.type], own = n.props.name && n.props.name !== d.name;
+      steps.push({ kind: "add", ref: n, title: own ? `Add ${an(d.name)} for “${n.props.name}”` : `Add ${an(d.name)}`, why: sentence1(DOCS.D[n.type]) || d.name });
+      added.add(id);
+      ref.edges.forEach((e, i) => {
+        if (wired.has(i) || !((e.to === id && added.has(e.from)) || (e.from === id && added.has(e.to)))) return;
+        wired.add(i); const a = by[e.from], b = by[e.to];
+        steps.push({ kind: "connect", ref: e, a, b, title: `Connect ${nameOf(a)} → ${nameOf(b)}`, why: e.fan ? `${nameOf(a)} also calls ${nameOf(b)} on every request, at the same time.` : e.failover ? "A backup path: used only when the main one fails." : e.only === "r" ? "Only reads go this way." : e.only === "w" ? "Only writes go this way." : `Requests travel from ${nameOf(a)} to ${nameOf(b)}.` });
+      });
+    });
+    steps.push({ kind: "run", title: "Press ▶ Start to send traffic", why: `The simulator sends about ${num(ref.scenario.base)} requests per second through your design. Boxes turn green, amber or red by how busy they are.` });
+    steps.push({ kind: "fit", title: "Make it handle the load", why: `Goal: 95% of requests answered within ${ref.slo.p95} ms and at least ${ref.slo.avail}% of them working. If a box is red, click it and raise Instances (for a database: Read replicas for reads, Shards for writes).` });
+    steps.push({ kind: "break", title: "Break something on purpose", why: "Real systems fail. Inject a failure while traffic runs and watch which boxes suffer and whether the design recovers." });
+    steps.push({ kind: "review", title: "Ask the mentor to review it", why: "The local mentor reads your design and its simulation numbers and explains what is good and what to improve." });
+    return { id: p.id, name: ref.name || p.name, ref, steps };
+  }
+  function initGuide() {
+    guide = buildGuide(); if (!guide) return;
+    if (!doc.guide || doc.guide.id !== guide.id) {
+      doc.guide = { id: guide.id }; doc.name = "My " + guide.name; doc.scenario = Object.assign({}, S.DEFAULT_SCENARIO, guide.ref.scenario); doc.slo = Object.assign({}, guide.ref.slo);
+      $("#title").value = doc.name; persist();
+    }
+    document.body.classList.add("has-guide");
+    const main = $("#main");
+    if (main && !$("#guidePanel")) { const g = document.createElement("aside"); g.id = "guidePanel"; g.setAttribute("aria-label", "Guided steps"); main.insertBefore(g, main.firstChild); }
+  }
+  function guideSummary() {
+    const key = hist[histAt] + "|" + JSON.stringify(doc.scenario);
+    if (guideSum.key !== key) {
+      const r = S.run(graphForSim(), doc.scenario, []), peak = {};
+      if (!r.error) r.st.history.forEach((h) => Object.entries(h.nodes || {}).forEach(([id, v]) => { peak[id] = Math.max(peak[id] || 0, v.util || 0); }));
+      guideSum = { key, sum: r.error ? null : r.summary, peak };
+    }
+    return guideSum.sum;
+  }
+  function peakUtil(id) { return (guide && guideSummary() && guideSum.peak[id]) || 0; }   // busiest moment of the simulated hour, not just now
+  function guideMap() {
+    const map = {}, used = new Set();
+    guide.steps.filter((s) => s.kind === "add").forEach((s) => {
+      const r = s.ref, pick = (pred) => doc.nodes.filter((n) => !used.has(n.id) && pred(n)).sort((a, b) => a.x - b.x)[0];
+      const c = pick((n) => n.type === r.type) || pick((n) => sameJob(r.type, n.type));
+      if (c) { map[r.id] = c.id; used.add(c.id); }
+    });
+    return map;
+  }
+  function guideStatus() {
+    const map = guideMap(), f = doc.guide || {};
+    const done = guide.steps.map((s) => {
+      if (s.kind === "add") return !!map[s.ref.id];
+      if (s.kind === "connect") { const a = map[s.a.id], b = map[s.b.id]; return !!(a && b && doc.edges.some((e) => e.from === a && e.to === b)); }
+      if (s.kind === "run") return !!f.ran;
+      if (s.kind === "fit") { if (!f.ran) return false; const m = guideSummary(); return !!(m && m.p95 <= +doc.slo.p95 && m.availability * 100 >= +doc.slo.avail); }
+      if (s.kind === "break") return !!f.broke;
+      return !!f.reviewed;
+    });
+    return { map, done };
+  }
+  function noteGuide(k) { if (!doc || !doc.guide || doc.guide[k]) return; doc.guide[k] = true; persist(); paintGuide(); }
+  function tidyLayout() { const r = STU.autoLayout(doc), pos = {}; r.doc.nodes.forEach((n) => { pos[n.id] = n; }); doc.nodes.forEach((n) => { if (pos[n.id] && !n.props.locked) { n.x = pos[n.id].x; n.y = pos[n.id].y; } }); commit(false); fitView(); }
+  let guideSig = "";
+  function paintGuide() {
+    const el = $("#guidePanel"); if (!el || !guide) return;
+    const { done } = guideStatus(), lv = skill || "beginner", m = (doc.guide || {}).ran ? guideSummary() : null;
+    const failing = Object.keys(chaos).filter((k) => chaos[k]);
+    const sig = lv + done.join("") + (m ? Math.round(m.p95) + ":" + m.availability.toFixed(4) : "") + guide.id + failing.join();
+    if (sig === guideSig) return; guideSig = sig;
+    const total = done.length, ok = done.filter(Boolean).length, cur = done.indexOf(false);
+    if (lv === "beginner" && STU && cur >= 0 && guide.steps[cur].kind === "run" && !doc.guide.tidied) {
+      doc.guide.tidied = true; const map = guideMap(), w = $("#board").getBoundingClientRect().width, cols = Math.max(2, Math.floor((w - 40) / (NW + 60)));
+      guide.steps.filter((s) => s.kind === "add").map((s) => map[s.ref.id] && node(map[s.ref.id])).filter((n) => n && !n.props.locked)
+        .forEach((n, i) => { n.x = 40 + NW / 2 + (i % cols) * (NW + 60); n.y = 40 + NH / 2 + Math.floor(i / cols) * (NH + 70); });   // rows that fit the canvas at full size, in build order
+      commit(false); fitView(); say("All boxes are in place. I lined them up in build order so they fit the canvas. Undo (Ctrl+Z) puts them back.");
+    }
+    const goal = `<div class="g-goal"><b>Goal</b> ${num(doc.scenario.base)} req/s · p95 ≤ ${doc.slo.p95} ms · ${doc.slo.avail}% working${m ? `<span class="${m.p95 <= doc.slo.p95 && m.availability * 100 >= doc.slo.avail ? "ok" : "bad"}">Now: p95 ${Math.round(m.p95)} ms · ${(m.availability * 100).toFixed(2)}%</span>` : ""}</div>`;
+    const btns = (s, i) => {
+      if (s.kind === "add") return `<button type="button" data-guide="show" data-i="${i}">Show me</button><button type="button" data-guide="do" data-i="${i}">Do it for me</button>`;
+      if (s.kind === "connect") return `<button type="button" data-guide="show" data-i="${i}">Show me</button><button type="button" data-guide="do" data-i="${i}">Do it for me</button>`;
+      if (s.kind === "run") return `<button type="button" class="primary-sm" data-guide="run">▶ Start now</button>`;
+      if (s.kind === "fit") return `<button type="button" data-guide="hot">Show the busiest box</button>`;
+      if (s.kind === "break") return `<button type="button" class="primary-sm" data-guide="break">Break the database</button>`;
+      return `<button type="button" class="primary-sm" data-guide="review">Review my design</button>`;
+    };
+    let list;
+    if (lv === "advanced") {
+      const chaos = done[total - 3] ? chaosReadiness() : null;
+      list = `<p class="g-intro">No step-by-step help at this level. Build it your way, meet the goal, then survive failures.</p>
+        <ol class="g-steps">${guide.steps.map((s, i) => [s, i]).filter(([s]) => ["run", "fit", "break", "review"].includes(s.kind)).map(([s, i]) => `<li class="${done[i] ? "done" : ""}"><b>${esc(s.title)}</b>${!done[i] ? `<div class="g-act">${btns(s, i)}</div>` : ""}</li>`).join("")}</ol>
+        ${chaos ? `<p class="g-note">Failure-drill score: <b>${chaos.score}/100</b> (80+ is strong).</p>` : ""}`;
+    } else if (lv === "intermediate") {
+      const build = guide.steps.map((s, i) => [s, i]).filter(([s]) => s.kind === "add" || s.kind === "connect"), rest = guide.steps.map((s, i) => [s, i]).filter(([s]) => !(s.kind === "add" || s.kind === "connect"));
+      list = `<p class="g-intro">Build these in any order. Ask for a hint only if you are stuck.</p>
+        <ul class="g-check">${build.map(([s, i]) => `<li class="${done[i] ? "done" : ""}"><span>${done[i] ? "✓" : "○"}</span>${esc(s.title)}${!done[i] ? `<button type="button" class="g-hint" data-guide="show" data-i="${i}">Hint</button>` : ""}</li>`).join("")}</ul>
+        <ol class="g-steps">${rest.map(([s, i]) => `<li class="${done[i] ? "done" : i === cur ? "now" : ""}"><b>${esc(s.title)}</b>${i === cur ? `<p>${esc(s.why)}</p><div class="g-act">${btns(s, i)}</div>` : ""}</li>`).join("")}</ol>`;
+    } else {
+      list = `<ol class="g-steps">${guide.steps.map((s, i) => `<li class="${done[i] ? "done" : i === cur ? "now" : "later"}"><b>${esc(s.title)}</b>${i === cur ? `<p>${esc(s.why)}</p><div class="g-act">${btns(s, i)}</div>` : ""}</li>`).join("")}</ol>`;
+    }
+    const FAIL = { dbDown: ["The database is down.", "Click the database box and turn on <b>Automatic failover</b> (a standby takes over in seconds) and add a <b>Read replica</b> so reads keep working."], cacheFlush: ["The cache was emptied, so every read hits the database.", "Give the database <b>Read replicas</b> so it can absorb the burst until the cache warms up again."], azOut: ["One data centre (zone) went offline and half the capacity is gone.", "Turn on <b>High availability</b> / <b>Automatic failover</b> on the load balancer and database, and run extra Instances."] };
+    const failBox = failing.length ? `<div class="g-fail"><b>Failure is on.</b> ${failing.map((k) => (FAIL[k] || [k])[0]).join(" ")} Red boxes are failing and requests are lost (see <i>errors now</i> at the bottom right).<p><b>How real systems survive it:</b> ${failing.map((k) => (FAIL[k] || [, ""])[1]).join(" ")}</p><div class="g-act"><button type="button" data-guide="heal">Stop the failure</button></div></div>` : "";
+    el.innerHTML = `<header class="g-head"><span class="g-level">${esc((LEVELS.find(([k]) => k === lv) || [, ""])[1])}</span><h2>Rebuild: ${esc(guide.name)}</h2>
+        <div class="g-bar" role="progressbar" aria-valuemin="0" aria-valuemax="${total}" aria-valuenow="${ok}"><i style="width:${Math.round(100 * ok / total)}%"></i></div><small>${ok} of ${total} done</small></header>
+      ${goal}${failBox}${list}
+      ${cur < 0 ? `<div class="g-done"><b>Well done!</b><p>You rebuilt the ${esc(guide.name)}, ran it, broke it and got a review. Try the next system, or move up a level at the top of the page.</p></div>` : ""}
+      <footer class="g-foot"><button type="button" data-guide="peek">Peek at the reference</button><button type="button" data-guide="fresh">Start over</button></footer>`;
+    const nowEl = el.querySelector(".g-fail") || el.querySelector("li.now");   // keep the failure note or current step visible without scrolling the page around the frame
+    if (nowEl && (nowEl.offsetTop < el.scrollTop || nowEl.offsetTop + nowEl.offsetHeight > el.scrollTop + el.clientHeight)) el.scrollTop = Math.max(0, nowEl.offsetTop - 120);
+  }
+  function guideAction(t) {
+    const a = t.dataset.guide, s = guide && guide.steps[+t.dataset.i], map = guide ? guideMap() : {};
+    if (a === "peek") { try { window.parent.postMessage({ type: "archlab-open-reference" }, "*"); } catch (e) { /* ignore */ } return; }
+    if (a === "fresh") { if (!window.confirm("Clear your canvas and start this system again?")) return; doc.nodes = []; doc.edges = []; doc.guide = { id: guide.id }; stop(); view = { x: 40, y: 20, z: 1 }; commit(); guideSig = ""; paintGuide(); return; }
+    if (a === "run") { if (!running) start(); return; }
+    if (a === "break") {
+      if (!running) start();
+      const k = doc.nodes.some((n) => S.BY_ID[n.type].cls === "db") ? "dbDown" : doc.nodes.some((n) => S.BY_ID[n.type].cls === "cache") ? "cacheFlush" : "azOut";
+      chaos[k] = true; paintChaos(); noteGuide("broke");
+      say("Failure injected. Read the box on the left to see what broke and how real systems survive it."); return;
+    }
+    if (a === "heal") { Object.keys(chaos).forEach((k) => { chaos[k] = false; }); paintChaos(); guideSig = ""; paintGuide(); say(doc.nodes.some((n) => S.BY_ID[n.type].cls === "db" && !n.props.ha) ? "Failure switched off. Without Automatic failover the database takes about 40 simulated seconds to be restored by hand; with it, about 4. Watch it recover." : "Failure switched off. Watch the boxes recover."); return; }
+    if (a === "review") { sel = { node: null, edge: null }; render(); setRightTab("ai", true); tab = "architect"; updSide(); aiReview(); return; }
+    if (a === "hot") {
+      if (!running && !lastRec) { start(); say("Running the simulation first: the busiest box will be selected in a moment."); setTimeout(() => guideAction(t), 2500); return; }
+      const rec = lastRec, worst = (id, v) => Math.max(v.util, peakUtil(id));
+      const hot = rec && Object.entries(rec.nodes).filter(([id]) => node(id) && S.BY_ID[node(id).type].cls !== "source").sort((x, y) => worst(...y) - worst(...x))[0];
+      if (hot) {
+        const hn = node(hot[0]), cls = S.BY_ID[hn.type].cls, w = worst(...hot), atPeak = w > hot[1].util + 0.05;
+        const tip = cls === "db" ? "Raise Read replicas if it is busy with reads, or Shards if it is busy with writes" : cls === "queue" ? "Raise its Workers" : cls === "cache" ? "Raise its Nodes" : "Raise its Instances";
+        sel = { node: hot[0], edge: null }; render(); say(`${nameOf(hn)} is ${atPeak ? `fine now but reaches ${Math.round(w * 100)}% at the traffic peak` : `${Math.round(w * 100)}% busy`}. ${tip} in the panel on the right.`);
+      }
+      return;
+    }
+    if (!s) return;
+    if (s.kind === "add") {
+      const d = S.BY_ID[s.ref.type];
+      if (a === "show") { partsQuery = d.name; if (provFilter !== "all" && d.prov !== provFilter) provFilter = "all"; renderParts(); setRightTab("parts", true); const b = document.querySelector(`#tab-parts .part[data-add="${s.ref.type}"]`); if (b) { b.scrollIntoView({ block: "center" }); b.classList.add("pulse"); setTimeout(() => b.classList.remove("pulse"), 2600); } say(`Drag “${d.name}” from the Components panel onto the canvas (or click it).`); return; }
+      const n = addNode(s.ref.type, s.ref.x, s.ref.y); if (s.ref.props.name) { n.props.name = s.ref.props.name; commit(false); }
+      partsQuery = ""; renderParts(); fitView(); if (narrowGuide()) document.body.classList.add("rp-collapsed"); return;
+    }
+    if (s.kind === "connect") {
+      const from = map[s.a.id], to = map[s.b.id];
+      if (!from || !to) { say("Add both boxes first."); return; }
+      if (a === "show") { highlight = new Set([from, to]); sel = { node: null, edge: null }; render(); say(`Drag from the round dot on the right edge of ${nameOf(node(from))} and drop it on ${nameOf(node(to))}.`); return; }
+      const { from: _f, to: _t, ...extra } = s.ref; doc.edges.push(Object.assign({ from, to, w: 1 }, extra)); highlight.clear(); commit();
+    }
+  }
+  (function studioShell() {
+    if (!aiWorkspace || referenceMode) return;
+    const bar = $("#bar"), main = $("#main"), stage = $("#stage"), rail = $("#studioRail"), tools = $(".tools");
+    if (!bar || !main || !stage) return;
+    document.body.classList.add("studio-shell");
+    const menu = $("#bar .menu"), ex = $("#mPreset"), exMenu = $("#presetMenu");
+    if (menu && ex && exMenu && !menu.contains(ex)) { menu.appendChild(ex); menu.appendChild(exMenu); }
+    let right = $("#barRight");
+    if (!right) { right = document.createElement("div"); right.id = "barRight"; right.className = "tools bar-right"; bar.appendChild(right); }
+    const viewLabel = document.createElement("label"); viewLabel.className = "bar-view"; viewLabel.innerHTML = "<span>View</span>";
+    if ($("#viewSel")) { viewLabel.appendChild($("#viewSel")); right.appendChild(viewLabel); }
+    [$("#levelControls"), $("#themeBtn")].forEach((el) => { if (el) right.appendChild(el); });
+    if (!right.querySelector('[data-act="help"]')) right.insertAdjacentHTML("beforeend", `<button type="button" data-act="help" title="Help and keyboard shortcuts" aria-label="Help">?</button>`);
+    if (tools && tools !== right) { if (tools.parentElement !== stage) stage.appendChild(tools); tools.classList.add("canvas-toolbar"); tools.setAttribute("aria-label", "Canvas tools"); }
+    // Learn embeds this canvas under its own header: no second header row, View moves into the canvas toolbar.
+    if (practiceMode && tools) { const vs = $("#viewSel"); if (vs) tools.appendChild(vs); document.body.classList.add("no-bar"); }
+    if (rail) {
+      main.insertBefore(rail, main.firstChild);
+      if (!rail.querySelector(".rail-title")) {
+        rail.insertAdjacentHTML("afterbegin", `<div class="rail-title">Design steps</div>`);
+        [["reqBtn", "Plan", "plan"], ["simBtn", "Validate", "validate"], ["verBtn", "Deliver", "deliver"]].forEach(([id, label, g]) => { const b = $("#" + id); if (b) b.insertAdjacentHTML("beforebegin", `<span class="rail-h" data-g="${g}">${label}</span>`); });
+      }
+    }
+    if (!$("#rightCol")) {
+      const col = document.createElement("aside"); col.id = "rightCol";
+      col.innerHTML = `<nav class="rp-tabs" role="tablist" aria-label="Side panel"><button type="button" role="tab" data-rp="parts">Components</button><button type="button" role="tab" data-rp="ai">AI assistant</button><button type="button" role="tab" data-rp="inspect">Inspect</button><button type="button" class="rp-collapse" title="Hide this panel" aria-label="Hide panel">⟩</button></nav>
+        <section id="rpInspect" class="rp-inspect"><div class="rp-empty"><b>Nothing selected</b><p>Click a box or a wire to see what it does, what it costs, its findings and its settings.</p><p>Double-click a box to open its internals (Level 2). Shift-click to select several.</p></div></section>`;
+      main.appendChild(col);
+      [$("#partsPanel"), $("#aiDeck")].forEach((el) => { if (el) col.appendChild(el); });
+      stage.insertAdjacentHTML("beforeend", `<button type="button" id="rpOpen" title="Show the side panel">⟨ Panel</button>`);
+      const wp = $("#wirePanel"); if (wp) $("#rpInspect").appendChild(wp);
+    }
+    let saved = ""; try { saved = localStorage.getItem("archlab.rp") || ""; if (localStorage.getItem("archlab.rp.collapsed")) document.body.classList.add("rp-collapsed"); } catch (e) { /* ignore */ }
+    setRightTab(["parts", "ai"].includes(saved) ? saved : practiceMode || doc.nodes.length > 1 ? "parts" : "ai");
+    kpis();
+    requestAnimationFrame(() => requestAnimationFrame(fitView));
+  })();
+  (function skillShell() {
+    if (!aiWorkspace || referenceMode) return;
+    const right = $("#barRight");
+    if (right && !practiceMode && !$("#skillSeg")) right.insertAdjacentHTML("afterbegin", `<div id="skillSeg" class="skill-seg" role="group" aria-label="Your level" title="Shows more tools as you grow">${LEVELS.map(([k, l]) => `<button type="button" data-skill="${k}" aria-pressed="${skill === k}">${l}</button>`).join("")}</div>`);
+    if (guideId) initGuide();
+    if (narrowGuide()) document.body.classList.add("rp-collapsed", "rp-float");
+    if (!skill && practiceMode) skill = "beginner";
+    setSkill(skill, true);
+    if (!skill) showSkillChooser();
   })();
 })();

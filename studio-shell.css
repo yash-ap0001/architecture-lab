@@ -1,0 +1,288 @@
+/* Studio shell: the standard layout for the Architecture Studio (Real Play, body.studio-shell).
+   Header | design steps · canvas · tabbed side panel | simulation bar.
+   Loaded after sandbox.css and theme-tactical.css so it wins without fighting their history. */
+
+body.studio-shell { --on-accent: #fff; --shadow: 0 6px 20px rgba(16, 24, 40, .10); --radius: 8px; }
+:root[data-theme="dark"] body.studio-shell { --on-accent: #14170f; --shadow: 0 6px 20px rgba(0, 0, 0, .45); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) body.studio-shell { --on-accent: #14170f; --shadow: 0 6px 20px rgba(0, 0, 0, .45); } }
+
+/* ---- type: one readable sans-serif, sentence case, no glow */
+html body.studio-shell { font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif; font-size: 13.5px; background: var(--bg); grid-template-rows: auto minmax(0, 1fr) auto !important; grid-template-columns: minmax(0, 1fr) !important; overflow-x: hidden; }
+body.studio-shell #bar, body.studio-shell #sim { min-width: 0; overflow: hidden; }
+body.studio-shell #title { flex: 1 1 auto; min-width: 70px; }
+body.studio-shell .kpis { min-width: 0; }
+body.studio-shell button, body.studio-shell input, body.studio-shell select, body.studio-shell textarea, body.studio-shell dialog { font-family: inherit; }
+body.studio-shell :is(.tabs button, .btnrow button, .seg button, #stop, .lbl, .kpi span, .play, .architect-kicker, .architect-step-label, .level-badge) { text-transform: none !important; letter-spacing: normal !important; }
+body.studio-shell :is(.primary-sm, .btnrow .primary-sm, .play, .part:hover, .chaos button[aria-pressed="true"], .tabs button[aria-pressed="true"]) { box-shadow: none !important; text-shadow: none !important; }
+body.studio-shell :is(#bar button, #title, .dropdown, .part, .search, .field input, .field select, .btnrow button, .seg, .chip, dialog, .primary-sm, .play, #stop, .architect-brief, #architectPrompt, .architect-example-row button, .architect-scale button, .memory-project) { border-radius: var(--radius) !important; }
+body.studio-shell .primary-sm, body.studio-shell .play { color: var(--on-accent) !important; }
+body.studio-shell #board, body.studio-shell #board text { font-family: "Segoe UI", system-ui, sans-serif !important; letter-spacing: normal !important; }
+body.studio-shell .hint { font-family: inherit !important; text-transform: none !important; letter-spacing: normal !important; opacity: 1 !important; }
+body.studio-shell #board .wire.ai-branch-2 .w, body.studio-shell #board .wire.ai-branch-3 .w { stroke-width: 4 !important; }
+
+/* ---- header: File, Examples, design name | View, Levels, theme, help */
+html.control-room-embed body.studio-shell #bar { display: flex !important; }
+html.control-room-embed body.studio-shell.no-bar #bar, body.studio-shell.no-bar #bar { display: none !important; }
+body.studio-shell.no-bar { grid-template-rows: minmax(0, 1fr) auto !important; }
+body.studio-shell #bar { height: 46px; flex-wrap: nowrap; gap: 8px; padding: 0 12px; background: var(--card); color: var(--ink); border-bottom: 1px solid var(--line); box-shadow: none; text-transform: none; letter-spacing: normal; font-size: 13px; }
+body.studio-shell #bar .home { display: none; }
+body.studio-shell #bar button { background: transparent; color: var(--ink); border: 1px solid var(--line); padding: 6px 11px; font-size: 13px; font-weight: 500; box-shadow: none; }
+body.studio-shell #bar button:hover { border-color: var(--accent); background: var(--accent-soft); }
+body.studio-shell #bar button[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); border-color: var(--accent); box-shadow: none; }
+body.studio-shell #title { width: clamp(150px, 22vw, 320px); padding: 6px 10px; border: 1px solid transparent; background: transparent; color: var(--ink); font-size: 15px; font-weight: 650; letter-spacing: normal; font-family: inherit; }
+body.studio-shell #title:hover, body.studio-shell #title:focus { border-color: var(--line); background: var(--bg); outline: none; }
+body.studio-shell .bar-right { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; }
+body.studio-shell .bar-view { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+body.studio-shell #viewSel { height: 32px; margin: 0; padding: 0 8px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); color: var(--ink); font-size: 13px; }
+body.studio-shell #levelControls { display: flex; border-color: var(--line); background: var(--bg); border-radius: var(--radius); }
+body.studio-shell #levelControls span { color: var(--muted); text-transform: none; letter-spacing: normal; font-size: 12px; font-weight: 600; }
+body.studio-shell #levelControls button { border: 0; padding: 4px 8px; }
+body.studio-shell #barRight [data-act="help"] { width: 32px; padding: 6px 0; font-weight: 700; }
+body.studio-shell .dropdown { top: 42px; }
+
+/* ---- body: steps | canvas | side panel */
+body.studio-shell #main { display: flex !important; flex-direction: row; min-height: 0; background: var(--bg); }
+
+/* design steps: numbered, grouped, status on the right */
+body.studio-shell #studioRail { position: static !important; transform: none !important; order: 0; flex: 0 0 216px; width: 216px; display: flex; flex-direction: column; gap: 2px; padding: 12px 10px; border: 0; border-right: 1px solid var(--line); border-radius: 0; background: var(--card); box-shadow: none; overflow-y: auto; counter-reset: step; }
+body.studio-shell .rail-title { padding: 2px 8px 2px; font-size: 13px; font-weight: 700; }
+body.studio-shell .rail-h { padding: 14px 8px 4px; color: var(--muted); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; }
+body.studio-shell #studioRail > button { counter-increment: step; display: grid; grid-template-columns: 22px 1fr auto; grid-template-rows: auto; align-items: center; column-gap: 8px; padding: 7px 8px; border: 1px solid transparent; border-radius: var(--radius); background: transparent; color: var(--ink); font-size: 13px; font-weight: 500; text-align: left; }
+body.studio-shell #studioRail > button::before { content: counter(step); display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font-size: 11px; font-weight: 700; }
+body.studio-shell #studioRail > button:hover { background: var(--accent-soft); border-color: transparent; }
+body.studio-shell #studioRail > button > i { display: none; }
+body.studio-shell #studioRail > button > span { grid-column: 2; grid-row: 1; }
+body.studio-shell #studioRail > button > em { grid-column: 3; grid-row: 1; max-width: 86px; padding: 1px 7px; border-radius: 999px; background: var(--bg); color: var(--muted); font-size: 11px; font-weight: 600; }
+body.studio-shell #studioRail > button > em.warn { background: var(--warn-bg); color: var(--warn); }
+body.studio-shell #studioRail > button > em.ok { background: var(--ok-bg); color: var(--ok); }
+body.studio-shell #lintBtn[data-worst="critical"] > em, body.studio-shell #lintBtn[data-worst="high"] > em { background: var(--bad-bg); color: var(--bad); }
+body.studio-shell #studioRail #costPill i { display: none; }
+
+/* canvas */
+body.studio-shell #levelStack { order: 1; flex: 1 1 auto; min-width: 0; overflow: hidden; background: var(--bg) !important; padding: 8px !important; }
+body.studio-shell .level-main { flex: 1 1 auto !important; min-width: 0 !important; }
+body.studio-shell #stage::before { top: 12px; left: 12px; padding: 4px 10px; font-size: 11.5px; font-weight: 600; letter-spacing: normal; text-transform: none; border-radius: 999px; }
+body.studio-shell #stage .hint { top: 45%; max-width: 420px; font-size: 14px; font-weight: 500; line-height: 1.5; color: var(--ink); }
+body.studio-shell #stage .banner { left: 50%; right: auto; top: auto; bottom: 66px; transform: translateX(-50%); width: max-content; max-width: calc(100% - 32px); z-index: 6; box-shadow: var(--shadow); font-size: 12.5px; }
+body.studio-shell #stage .multi-bar { top: 12px; bottom: auto; }
+body.studio-shell #stage #minimap { top: 12px; right: 12px; }
+body.studio-shell #partsShow, body.studio-shell #deckShow, body.studio-shell #sideShow { display: none !important; }
+
+/* floating canvas toolbar */
+html body.studio-shell #stage .canvas-toolbar { position: absolute; left: 50%; right: auto; top: auto; bottom: 14px; transform: translateX(-50%); z-index: 7; display: flex; flex-wrap: nowrap; align-items: center; gap: 2px; margin: 0; padding: 4px; max-width: calc(100% - 24px); overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; background: var(--card); box-shadow: var(--shadow); }
+html body.studio-shell #stage .canvas-toolbar button { flex: 0 0 auto; padding: 6px 10px; border: 0; border-radius: var(--radius) !important; background: transparent; color: var(--ink); font-size: 13px; font-weight: 500; box-shadow: none; white-space: nowrap; }
+html body.studio-shell #stage .canvas-toolbar button:hover { background: var(--accent-soft); }
+html body.studio-shell #stage .canvas-toolbar button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); font-weight: 650; }
+html body.studio-shell #stage .canvas-toolbar button:disabled { opacity: .35; }
+html body.studio-shell #stage .canvas-toolbar :is(#undo, #zoomOut, [data-act="layout"]) { margin-left: 6px; border-left: 1px solid var(--line) !important; border-radius: 0 var(--radius) var(--radius) 0 !important; }
+html body.studio-shell #stage .canvas-toolbar :is([data-act="resetSimple"], #mPreset, #presetMenu, #viewSel, #themeBtn) { display: none !important; }
+html body.studio-shell.no-bar #stage .canvas-toolbar #viewSel { display: block !important; height: 30px; margin-left: 6px; padding: 0 6px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); color: var(--ink); font-size: 12.5px; }
+
+/* side panel: one column, three tabs */
+body.studio-shell #rightCol { order: 2; flex: 0 0 var(--rp-w, 348px); width: var(--rp-w, 348px); display: flex; flex-direction: column; min-width: 0; min-height: 0; border-left: 1px solid var(--line); background: var(--card); }
+body.studio-shell.rp-collapsed #rightCol { display: none; }
+body.studio-shell #rpOpen { display: none; }
+body.studio-shell.rp-collapsed #rpOpen { display: block; position: absolute; right: 12px; top: 140px; z-index: 6; padding: 6px 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); color: var(--ink); box-shadow: var(--shadow); }
+body.studio-shell .rp-tabs { flex: 0 0 auto; display: flex; gap: 2px; padding: 0 6px; border-bottom: 1px solid var(--line); }
+body.studio-shell .rp-tabs button { flex: 1; padding: 12px 6px 10px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); font-size: 13px; font-weight: 600; }
+body.studio-shell .rp-tabs button:hover { color: var(--ink); }
+body.studio-shell .rp-tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+body.studio-shell .rp-tabs .rp-collapse { flex: 0 0 32px; font-size: 15px; }
+body.studio-shell #rightCol > :is(#partsPanel, #aiDeck, #rpInspect) { display: none !important; flex: 1 1 auto !important; width: auto !important; min-height: 0; border: 0 !important; order: 0; }
+body.studio-shell #rightCol[data-tab="parts"] > #partsPanel, body.studio-shell #rightCol[data-tab="ai"] > #aiDeck { display: flex !important; flex-direction: column; overflow: auto; }
+body.studio-shell #rightCol[data-tab="inspect"] > #rpInspect { display: block !important; overflow: auto; }
+body.studio-shell #rightCol :is(#partsGrip, #deckGrip, .ai-deck-head) { display: none !important; }
+body.studio-shell #rightCol #aiDeck { background: var(--card); }
+body.studio-shell .rp-empty { padding: 28px 20px; color: var(--muted); line-height: 1.5; }
+body.studio-shell .rp-empty b { display: block; margin-bottom: 6px; color: var(--ink); font-size: 14px; }
+body.studio-shell .rp-empty p { margin: 0 0 8px; }
+body.studio-shell #rpInspect:has(.wire-panel:not([hidden])) .rp-empty { display: none; }
+body.studio-shell #rpInspect .wire-panel { position: static; width: auto; max-height: none; border: 0; border-radius: 0; box-shadow: none; }
+body.studio-shell #rpInspect .wire-panel header { padding: 12px 14px; }
+body.studio-shell #rpInspect .wire-panel header b { font-size: 15px; }
+body.studio-shell #rpInspect .wire-panel-body { padding: 4px 14px 16px; font-size: 13px; }
+body.studio-shell .ex-tools { flex-wrap: wrap; }
+body.studio-shell .ex-tools .danger { color: var(--bad); border-color: var(--bad); }
+body.studio-shell #partTip { border-top: 1px solid var(--line); }
+/* components: search, provider and expand/collapse in one row; a denser two-column list */
+body.studio-shell .parts-tools { position: sticky; top: 0; z-index: 2; display: flex; gap: 6px; align-items: center; margin: 0 0 8px; padding: 2px 0 6px; background: var(--card); }
+body.studio-shell .parts-tools .search { flex: 1 1 auto; min-width: 0; margin: 0 !important; height: 32px; }
+body.studio-shell .parts-tools select { flex: 0 0 auto; width: 112px; height: 32px; padding: 0 6px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); color: var(--ink); font: inherit; font-size: 12.5px; }
+body.studio-shell .icon-btn { flex: 0 0 30px; width: 30px; height: 32px; padding: 0; border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); color: var(--muted); font-size: 15px; }
+body.studio-shell .icon-btn:hover { color: var(--accent); border-color: var(--accent); }
+body.studio-shell #rightCol .parts { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; grid-auto-rows: 34px; gap: 4px !important; }
+body.studio-shell #rightCol .part { flex-direction: row !important; justify-content: flex-start; align-items: center; gap: 7px !important; min-height: 0 !important; height: 34px; padding: 5px 8px !important; border-top-width: 1px !important; text-align: left; font-size: 12.5px !important; line-height: 1.2; overflow: hidden; white-space: nowrap; }
+body.studio-shell #rightCol .part > span { font-size: 16px !important; flex: 0 0 auto; }
+body.studio-shell #rightCol .part em.prov { margin-left: auto; font-size: 9px; }
+body.studio-shell #rightCol details.sec.cat > .parts { max-height: 120px; }
+/* inside Learn the steps rail shows numbers only (names on hover): the canvas matters more there */
+body.studio-shell.no-bar #studioRail { flex-basis: 56px; width: 56px; padding: 10px 6px; }
+body.studio-shell.no-bar :is(.rail-title, .rail-h) { display: none; }
+body.studio-shell.no-bar #studioRail > button { grid-template-columns: 1fr; justify-items: center; padding: 8px 0; }
+body.studio-shell.no-bar #studioRail > button > :is(span, em) { display: none; }
+body.studio-shell.no-bar #studioRail > button::before { width: 28px; height: 28px; font-size: 12px; }
+body.studio-shell #rightCol details.sec.cat > .parts.expanded { max-height: none; }
+body.studio-shell #partsPanel { position: relative; }
+body.studio-shell #partTip { position: absolute; left: 8px; right: 8px; bottom: 8px; z-index: 3; max-height: 55%; border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow); pointer-events: none; }
+body.studio-shell #partTip:has(> p.muted:only-child) { display: none; }
+
+/* AI assistant: calmer header */
+body.studio-shell .architect-hero h2 { font-size: 17px; line-height: 1.3; }
+body.studio-shell .architect-kicker { font-size: 11.5px !important; font-weight: 650; }
+body.studio-shell #aiDeck :is(b, small, span, label, h3, h4, summary):not(.architect-kicker) { text-transform: none !important; letter-spacing: normal !important; }
+
+/* ---- simulation bar: one row */
+body.studio-shell #sim { position: relative; z-index: 8; flex-wrap: nowrap; gap: 14px; min-height: 54px; padding: 8px 14px; overflow: visible; background: var(--card); border-top: 1px solid var(--line); box-shadow: none; }
+body.studio-shell .play { min-width: 96px; padding: 8px 14px; clip-path: none !important; letter-spacing: normal; }
+body.studio-shell .lbl { font-size: 12px; font-weight: 600; }
+body.studio-shell #mult { width: 110px; }
+body.studio-shell .kpis { margin-left: auto; flex-wrap: nowrap; gap: 6px; overflow-x: auto; }
+body.studio-shell .kpi-idle { color: var(--muted); font-size: 12.5px; white-space: nowrap; }
+body.studio-shell .kpi { min-width: 78px; padding: 3px 9px; border: 1px solid var(--line); border-radius: var(--radius); text-align: left; }
+body.studio-shell .kpi b { font-family: inherit !important; font-size: 14px; letter-spacing: normal; }
+body.studio-shell .kpi span { font-size: 11px; }
+
+/* "Inject failure" menu (both layouts) */
+.chaos-menu { position: relative; flex: 0 0 auto; }
+.chaos-menu summary { list-style: none; cursor: pointer; padding: 7px 11px; border: 1px solid var(--line); border-radius: 8px; font-size: 13px; font-weight: 600; white-space: nowrap; user-select: none; }
+.chaos-menu summary::-webkit-details-marker { display: none; }
+.chaos-menu[open] summary, .chaos-menu summary:hover { border-color: var(--bad); color: var(--bad); }
+.chaos-menu #chaosCount:not(:empty) { margin-left: 6px; padding: 0 6px; border-radius: 999px; background: var(--bad); color: #fff; font-size: 11px; }
+.chaos-menu .chaos-list { position: absolute; left: 0; bottom: calc(100% + 8px); z-index: 30; display: grid; grid-template-columns: 1fr 1fr; gap: 6px; width: 340px; padding: 10px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); box-shadow: 0 12px 32px rgba(0, 0, 0, .2); }
+.chaos-menu .chaos-list p { grid-column: 1 / -1; margin: 0 0 2px; color: var(--muted); font-size: 12px; }
+.chaos-menu .chaos-list button { text-align: left; }
+.chaos-menu #regionChaos { display: contents; }
+/* classic sandbox keeps the dark simulation bar: its controls need light text */
+body:not(.studio-shell) #sim :is(.seg button, #stop, .chaos-menu summary) { color: #ece8ff; background: transparent; border-color: rgba(236, 232, 255, .3); }
+body:not(.studio-shell) #sim .seg button[aria-pressed="true"] { color: #fff; background: var(--accent); }
+body:not(.studio-shell) #sim .chaos-menu .chaos-list button { color: var(--ink); }
+
+/* ---- dialogs: same type and spacing */
+body.studio-shell .cost-dialog { border-radius: 12px !important; }
+body.studio-shell .cost-head b { font-size: 16px; }
+
+/* ---- smaller screens: steps become numbers, then everything stacks */
+@media (max-width: 1100px) {
+  body.studio-shell #studioRail { flex-basis: 64px; width: 64px; padding: 10px 8px; }
+  body.studio-shell :is(.rail-title, .rail-h) { display: none; }
+  body.studio-shell #studioRail > button { grid-template-columns: 1fr; justify-items: center; padding: 8px 0; }
+  body.studio-shell #studioRail > button > :is(span, em) { display: none; }
+  body.studio-shell #studioRail > button::before { width: 28px; height: 28px; font-size: 12px; }
+  body.studio-shell #rightCol { --rp-w: 300px; }
+  body.studio-shell .bar-view span { display: none; }
+}
+@media (max-width: 980px) {
+  body.studio-shell #rightCol { --rp-w: 280px; }
+  body.studio-shell .kpi:nth-child(n+5) { display: none; }
+  body.studio-shell #levelControls > span { display: none; }
+}
+@media (max-width: 760px) {
+  body.studio-shell #bar { height: auto; flex-wrap: wrap; padding: 6px 10px; }
+  body.studio-shell #main { flex-direction: column !important; }
+  body.studio-shell #studioRail { flex: 0 0 auto; width: auto; flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line); }
+  body.studio-shell #rightCol { flex: 0 0 40vh; width: auto; border-left: 0; border-top: 1px solid var(--line); }
+  body.studio-shell #sim { flex-wrap: wrap; }
+}
+
+/* ---- skill level */
+body.studio-shell .skill-seg { display: flex; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg); }
+body.studio-shell .skill-seg button { padding: 4px 9px !important; border: 0 !important; border-radius: 6px !important; background: transparent !important; color: var(--muted) !important; font-size: 12px !important; font-weight: 600 !important; }
+body.studio-shell .skill-seg button[aria-pressed="true"] { background: var(--card) !important; color: var(--ink) !important; box-shadow: 0 1px 2px rgba(0,0,0,.12), inset 0 0 0 1px var(--line) !important; }
+body.lvl-beginner :is(#optBtn, #verBtn, #readyBtn, #exportBtn, .rail-h[data-g="deliver"], #levelControls, .bar-view, .parts-tools select) { display: none !important; }
+body.lvl-intermediate :is(#verBtn, #readyBtn) { display: none !important; }
+.skill-dialog { width: min(760px, 94vw); padding: 24px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); color: var(--ink); box-shadow: 0 24px 64px rgba(0,0,0,.35); font-family: "Segoe UI", system-ui, sans-serif; }
+.skill-dialog::backdrop { background: rgba(10, 8, 20, .55); }
+.skill-dialog h2 { margin: 0 0 4px; font-size: 20px; } .skill-dialog > p { margin: 0 0 16px; color: var(--muted); }
+.skill-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.skill-cards button { display: flex; flex-direction: column; gap: 6px; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); color: var(--ink); text-align: left; font: inherit; cursor: pointer; }
+.skill-cards button:hover { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.skill-cards b { font-size: 15px; } .skill-cards span { color: var(--muted); font-size: 13px; line-height: 1.45; }
+@media (max-width: 700px) { .skill-cards { grid-template-columns: 1fr; } }
+
+/* ---- settings in the Inspect panel */
+.set-grid { display: grid; gap: 6px; margin: 4px 0 8px; }
+.set-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; }
+.set-row label { font-size: 12.5px; font-weight: 600; } .set-row label small { display: block; color: var(--muted); font-weight: 400; font-size: 11.5px; }
+.set-row input[type="number"] { width: 84px; padding: 5px 7px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--ink); font: inherit; }
+.set-row .seg { display: inline-flex; } .set-row .seg button { padding: 4px 9px; font-size: 12px; }
+.set-load { margin: 4px 0 8px !important; padding: 6px 9px; border-radius: 8px; font-size: 12.5px; } .set-load.ok { background: var(--ok-bg); } .set-load.warn { background: var(--warn-bg); } .set-load.bad { background: var(--bad-bg); color: var(--bad); }
+
+/* ---- guided steps (Learn) */
+body.studio-shell.has-guide #studioRail { display: none !important; }
+body.studio-shell #guidePanel { order: 0; flex: 0 0 300px; width: 300px; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding: 14px; border-right: 1px solid var(--line); background: var(--card); color: var(--ink); font-size: 13px; }
+#guidePanel .g-head h2 { margin: 4px 0 8px; font-size: 16px; line-height: 1.25; }
+#guidePanel .g-level { display: inline-block; padding: 2px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 11.5px; font-weight: 700; }
+#guidePanel .g-bar { height: 6px; border-radius: 9px; background: var(--bg); box-shadow: inset 0 0 0 1px var(--line); overflow: hidden; } #guidePanel .g-bar i { display: block; height: 100%; background: var(--ok); border-radius: 9px; }
+#guidePanel .g-head small { color: var(--muted); font-size: 12px; }
+#guidePanel .g-goal { padding: 8px 10px; border-radius: 8px; background: var(--bg); box-shadow: inset 0 0 0 1px var(--line); font-size: 12.5px; line-height: 1.5; }
+#guidePanel .g-goal span { display: block; font-weight: 600; } #guidePanel .g-goal .ok { color: var(--ok); } #guidePanel .g-goal .bad { color: var(--bad); }
+#guidePanel .g-intro, #guidePanel .g-note { margin: 0; color: var(--muted); line-height: 1.5; }
+#guidePanel ol.g-steps { margin: 0; padding: 0; list-style: none; counter-reset: g; display: grid; gap: 4px; }
+#guidePanel ol.g-steps > li { counter-increment: g; position: relative; padding: 7px 8px 7px 34px; border-radius: 8px; line-height: 1.4; }
+#guidePanel ol.g-steps > li::before { content: counter(g); position: absolute; left: 6px; top: 6px; display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: var(--bg); box-shadow: inset 0 0 0 1px var(--line); color: var(--muted); font-size: 11px; font-weight: 700; }
+#guidePanel ol.g-steps > li.done { color: var(--muted); } #guidePanel ol.g-steps > li.done::before { content: "✓"; background: var(--ok); color: #fff; box-shadow: none; }
+#guidePanel ol.g-steps > li.done b { font-weight: 500; text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--muted) 50%, transparent); }
+#guidePanel ol.g-steps > li.later { color: var(--muted); opacity: .75; } #guidePanel ol.g-steps > li.later b { font-weight: 500; }
+#guidePanel ol.g-steps > li.now { background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); } #guidePanel ol.g-steps > li.now::before { background: var(--accent); color: var(--accent-ink); box-shadow: none; }
+#guidePanel ol.g-steps > li p { margin: 4px 0 8px; color: var(--ink); font-size: 12.5px; line-height: 1.5; }
+#guidePanel .g-act { display: flex; flex-wrap: wrap; gap: 6px; }
+#guidePanel .g-act button, #guidePanel .g-foot button, #guidePanel .g-hint { padding: 5px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--card); color: var(--ink); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; }
+#guidePanel .g-act button:hover, #guidePanel .g-foot button:hover, #guidePanel .g-hint:hover { border-color: var(--accent); color: var(--accent); }
+#guidePanel .g-act .primary-sm { background: var(--accent); border-color: var(--accent); color: var(--accent-ink) !important; }
+#guidePanel ul.g-check { margin: 0; padding: 0; list-style: none; display: grid; gap: 3px; }
+#guidePanel ul.g-check li { display: flex; align-items: center; gap: 7px; padding: 4px 2px; } #guidePanel ul.g-check li.done { color: var(--muted); } #guidePanel ul.g-check li span { width: 14px; text-align: center; color: var(--ok); font-weight: 700; }
+#guidePanel .g-hint { margin-left: auto; padding: 2px 8px !important; font-size: 11.5px !important; }
+#guidePanel .g-done { padding: 10px 12px; border-radius: 10px; background: var(--ok-bg); } #guidePanel .g-done p { margin: 4px 0 0; line-height: 1.5; }
+#guidePanel .g-foot { margin-top: auto; display: flex; gap: 6px; padding-top: 6px; border-top: 1px solid var(--line); }
+#tab-parts .part.pulse { animation: gpulse 0.9s ease-in-out 3; border-color: var(--accent) !important; box-shadow: 0 0 0 3px var(--accent-soft); }
+@keyframes gpulse { 50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 35%, transparent); } }
+@media (max-width: 1100px) { body.studio-shell #guidePanel { flex-basis: 260px; width: 260px; } }
+@media (max-width: 760px) { body.studio-shell #guidePanel { flex: 0 0 auto; width: auto; max-height: 40vh; border-right: 0; border-bottom: 1px solid var(--line); } }
+
+/* beginner: no level jargon on the canvas; note under the basic palette */
+body.lvl-beginner.ai-workspace #stage::before { display: none; }
+.parts-note { margin: 6px 2px 2px; color: var(--muted); font-size: 11.5px; line-height: 1.4; }
+#guidePanel .g-fail { margin: 0 0 10px; padding: 10px 12px; border: 1px solid color-mix(in srgb, #dc2626 45%, var(--line)); border-radius: 10px; background: color-mix(in srgb, #dc2626 8%, var(--card)); font-size: 12.5px; line-height: 1.5; }
+#guidePanel .g-fail p { margin: 6px 0 0; }
+
+/* guided practice on narrow windows: thin light scrollbars, room for the canvas, no minimap for beginners */
+body.studio-shell, body.studio-shell * { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--muted) 40%, transparent) transparent; }
+body.studio-shell.has-guide.lvl-beginner #minimap { display: none !important; }
+@media (max-width: 1100px) {
+  body.studio-shell.has-guide #guidePanel { flex-basis: 240px; width: 240px; padding: 12px; }
+  body.studio-shell.has-guide #rightCol { --rp-w: 260px; }
+}
+/* beginner guide: only the canvas tools a beginner needs (drag empty space to pan, drag the dot to connect) */
+html body.studio-shell.has-guide.lvl-beginner #stage .canvas-toolbar :is([data-tool], #zoomReset, #viewSel) { display: none !important; }
+/* guided practice: connection dots always visible so beginners can find them */
+body.has-guide #board .handle { opacity: .7; }
+/* phones: the studio scrolls as one page (steps, canvas, panel) instead of squeezing three panes into one screen */
+@media (max-width: 760px) {
+  html:has(> body.studio-shell), html body.studio-shell { height: auto; min-height: 100%; overflow-y: auto; }
+  html body.studio-shell { grid-template-rows: auto auto auto !important; }
+  body.studio-shell #main { height: auto; }
+  body.studio-shell.has-guide #guidePanel { flex: 0 0 auto; width: auto; max-height: none; padding: 12px; }
+  body.studio-shell.has-guide.lvl-beginner #guidePanel .g-steps li:not(.now) { display: none; }
+  body.studio-shell #stage { flex: 0 0 auto; height: 62vh; min-height: 320px; }
+  body.studio-shell #rightCol { flex: 0 0 auto; width: auto; height: 70vh; }
+}
+
+/* shared-screen review: compact finished steps, readable component names, no cut-off idle text */
+body.studio-shell #guidePanel { position: relative; }
+#guidePanel ol.g-steps > li.done { padding-top: 3px; padding-bottom: 3px; font-size: 12px; }
+#guidePanel ol.g-steps > li.done::before { top: 3px; width: 18px; height: 18px; font-size: 10px; }
+body.studio-shell #rightCol .part { white-space: normal !important; padding: 3px 8px !important; font-size: 12px !important; line-height: 1.15; overflow-wrap: anywhere; }
+body.studio-shell .kpi-idle { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+/* guided beginner: a calmer run bar (no speed control, the three numbers that matter, no sideways scroll) */
+body.studio-shell.has-guide.lvl-beginner #sim > div.grp:nth-of-type(2) { display: none; }
+body.studio-shell.has-guide #kpis { overflow: hidden; }
+@media (max-width: 1100px) { body.studio-shell.has-guide #kpis .kpi:nth-child(n+4) { display: none; } }
+
+/* narrow guided practice (761-900 px): the side panel floats over the canvas instead of taking a column */
+@media (min-width: 761px) and (max-width: 900px) {
+  body.studio-shell.rp-float #main { position: relative; }
+  body.studio-shell.rp-float #rightCol { position: absolute; top: 0; right: 0; bottom: 0; z-index: 9; width: min(300px, 46vw); box-shadow: -12px 0 28px rgba(0, 0, 0, .18); }
+  body.studio-shell.rp-float.rp-collapsed #rpOpen { top: 12px; }
+}
+.change-actions { flex-wrap: wrap; }
+.change-actions .req-saved { flex-basis: 100%; margin: 0 0 4px; color: var(--ok); font-size: 12.5px; font-weight: 600; }

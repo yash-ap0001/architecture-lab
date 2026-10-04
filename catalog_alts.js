@@ -432,6 +432,22 @@
     ["kms-aws", "managed encryption keys are sufficient", "you need certified hardware isolation"],
     ["cloudkms", "managed encryption keys on Google Cloud are enough", "you need certified hardware isolation"]);
 
+  // ---------------------------------------------------------------- AI safety, failed messages, backups
+  g("AI safety and agent control", "How do you keep AI agents and model calls safe?",
+    ["guardrails", "model calls take user or document text that could carry injected instructions", "the model only ever sees fixed, trusted internal prompts"],
+    ["toolgw", "an agent can call tools or APIs that change data or spend money", "the agent only reads public information"],
+    ["approval", "an action moves money, sends messages, deletes data or cannot be undone", "the action is read-only and low risk, where approval only adds delay"],
+    ["agent", "a task needs several steps and tool calls that one prompt cannot do", "a single prompt or a fixed workflow already does the job, more cheaply and predictably"]);
+  g("Model routing and AI cost control", "How do you keep model spend under control?",
+    ["modelrouter", "AI spend is significant and many requests are easy or repeated", "traffic is tiny or every request needs the strongest model"],
+    ["llmgw", "you need one place for keys, quotas, logging and provider failover", "a single app calls a single model"]);
+  g("Failed message handling", "Where do messages go when processing keeps failing?",
+    ["dlq", "a consumer can fail on a bad message and must not block the rest", "the work is fire-and-forget and losing a message is acceptable"],
+    ["sqs", "you are on AWS: a redrive policy moves failing messages to a second SQS queue for you", "you need ordered replay of a long event history"]);
+  g("Backup and restore", "How is data recovered after deletion, corruption or ransomware?",
+    ["backup", "you keep any data you cannot recreate from somewhere else", "the data is a cache or can be rebuilt from another source"],
+    ["object", "you export database dumps yourself to versioned, write-locked object storage", "you need point-in-time restore without scripts to maintain"]);
+
   const BY = {}; G.forEach((grp) => grp.rows.forEach(([id, pick, avoid]) => { (BY[id] = BY[id] || []).push({ group: grp, pick, avoid }); }));
   /* Decision info for a component: its first group, the "why this" and "why not" lines, and the alternatives. */
   function info(id) {

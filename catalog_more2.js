@@ -42,5 +42,14 @@
   add("azactivity", "Azure Activity Log", "Observability", "📜", "passive", "azure", "audit", { cost: 20, tag: "audit" });
   add("inspector", "Inspector (vulnerability scan)", "Security & identity", "🔎", "passive", "aws", "vulnscan", { cost: 25, tag: "security-scan" });
   add("cloudhsm", "HSM (CloudHSM / Managed HSM)", "Security & identity", "🔒", "external", "generic", "hsm", svc(2000, 4, 1200));
+
+  // AI agents, safety and reliability building blocks
+  add("agent", "AI agent / orchestrator", "AI & ML", "🤖", "service", "generic", "", svc(60, 800, 300, { tag: "agent" }));
+  add("guardrails", "AI guardrails (input / output filter)", "AI & ML", "🛡️", "proxy", "generic", "", svc(3000, 25, 80, { tag: "guardrail" }));
+  add("toolgw", "Agent tool gateway (allow-list)", "AI & ML", "🧰", "proxy", "generic", "", svc(2000, 10, 60, { tag: "toolgw" }));
+  add("modelrouter", "Model router + semantic cache", "AI & ML", "🔀", "proxy", "generic", "", svc(3000, 6, 90, { tag: "modelrouter" }));
+  add("approval", "Human approval queue", "AI & ML", "✋", "queue", "generic", "", svc(50, 5, 30, { unit: 10, tag: "approval" }));
+  add("dlq", "Dead-letter queue", "Messaging", "📮", "queue", "generic", "", svc(200, 5, 15, { unit: 5, tag: "dlq" }));
+  add("backup", "Backup vault (snapshots + point-in-time restore)", "Storage", "💾", "passive", "generic", "", { cost: 60, tag: "backup" });
   return out;
 });

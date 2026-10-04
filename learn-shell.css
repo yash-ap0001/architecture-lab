@@ -1,0 +1,108 @@
+/* Learn page (reference practice): a full-width workspace with the same type, controls and colours as the
+   Architecture Studio. Scoped to html.std-ui (set by app.js in practice mode) so the level game keeps its look. */
+html.std-ui, html.std-ui body { font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif; font-size: 14px; background: var(--bg); }
+html.std-ui main#app { max-width: none !important; width: 100%; padding: 0 !important; }
+html.std-ui .top h1 { text-transform: none; letter-spacing: normal; font-size: 15px; }
+html.std-ui .foot { display: none; }
+html.std-ui .lp, html.std-ui .lp :is(button, select, input, h2, h3, p, b, small, span, summary, li) { font-family: inherit; text-transform: none !important; letter-spacing: normal !important; text-shadow: none !important; }
+html.std-ui .lp .lp-card { border-radius: 12px !important; }
+
+/* workspace: top bar + work area fill the viewport */
+.lp { display: flex; flex-direction: column; gap: 0; height: 100vh; min-height: 560px; }
+html.std-ui:not(.control-room-embed) .lp { height: calc(100vh - 68px); }
+.lp.lp-guided { height: auto; gap: 16px; padding-bottom: 16px; }
+
+.lp-top { position: sticky; top: 0; z-index: 4; flex: 0 0 auto; display: flex; align-items: center; gap: 14px; padding: 8px 14px; border-bottom: 1px solid var(--line); background: var(--card); }
+.lp-title { flex: 0 0 auto; display: flex; flex-direction: column; min-width: 150px; }
+.lp-eyebrow { margin: 0; color: var(--accent); font-size: 11.5px; font-weight: 650; white-space: nowrap; }
+.lp-title h2 { margin: 1px 0 0; font-size: 16px; font-weight: 700; line-height: 1.2; white-space: nowrap; }
+.lp-strip { flex: 1 1 auto; min-width: 0; display: flex; gap: 6px; overflow-x: auto; scrollbar-width: thin; padding: 2px; }
+.lp-chip { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; padding: 6px 11px 6px 7px; border: 1px solid var(--line); border-radius: 999px; background: var(--bg); color: var(--ink); font-size: 13px; font-weight: 550; white-space: nowrap; cursor: pointer; }
+.lp-chip small { display: grid; place-items: center; width: 19px; height: 19px; border-radius: 50%; background: var(--card); border: 1px solid var(--line); color: var(--muted); font-size: 10.5px; font-weight: 700; }
+.lp-chip:hover { border-color: var(--accent); }
+.lp-chip[aria-checked="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--ink); box-shadow: inset 0 0 0 1px var(--accent); }
+.lp-chip[aria-checked="true"] small { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.lp-tools { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; }
+.lp-seg { display: flex; gap: 2px; padding: 3px; border-radius: 9px; background: var(--bg); border: 1px solid var(--line); }
+.lp-seg button { padding: 5px 10px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); font-size: 12.5px; font-weight: 600; white-space: nowrap; cursor: pointer; }
+.lp-seg button:hover { color: var(--ink); }
+.lp-seg button[aria-pressed="true"] { background: var(--card); color: var(--ink); box-shadow: 0 1px 2px rgba(0, 0, 0, .12), inset 0 0 0 1px var(--line); }
+.lp-icon { width: 34px; height: 34px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); font-size: 16px; cursor: pointer; }
+.lp-icon:hover { border-color: var(--accent); color: var(--accent); }
+html.std-ui .lp .primary { width: auto; min-height: 0; padding: 8px 14px; border: 0; border-radius: 8px !important; background: var(--accent); color: var(--accent-ink); font-size: 13.5px; font-weight: 650; white-space: nowrap; box-shadow: none !important; clip-path: none !important; }
+html.std-ui .lp .primary:hover { filter: brightness(1.06); }
+.lp :is(button, summary):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.lp-work { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: var(--lp-ref-w, 380px) minmax(0, 1fr); background: var(--bg); }
+.lp-work:fullscreen { height: 100vh; background: var(--bg); }
+.lp-focus .lp-work { grid-template-columns: minmax(0, 1fr); }
+.lp-focus .lp-ref { display: none; }
+.lp-ref { min-height: 0; overflow: auto; display: flex; flex-direction: column; border-right: 1px solid var(--line); background: var(--card); }
+.lp-ref-head { padding: 12px 14px 8px; }
+.lp-ref-head b { display: block; font-size: 13px; }
+.lp-ref-head span { display: block; margin-top: 2px; color: var(--muted); font-size: 12.5px; line-height: 1.45; }
+.lp-ref .practice-reference-canvas { position: relative; flex: 0 0 auto; margin: 0 12px; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--bg); }
+.lp-ref .practice-reference { display: block; width: 100%; height: clamp(220px, 40vh, 420px); border: 0; }
+.lp-ref .practice-reference-learn { padding: 12px 14px 16px; }
+.lp .practice-reference-learn b { display: block; margin: 0 0 6px; font-size: 13px; }
+.lp .practice-reference-learn p { margin: 0 0 14px; color: var(--muted); font-size: 13px; line-height: 1.6; }
+.lp-check { margin: 0; padding-left: 18px; color: var(--muted); font-size: 13px; line-height: 1.6; }
+html.std-ui .lp .practice-reference-pop { position: absolute; right: 8px; top: 8px; z-index: 2; padding: 4px 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--card); color: var(--ink); font-size: 12px; font-weight: 600; box-shadow: none; }
+
+.lp-build { min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--bg); }
+html.std-ui .lp .lp-build .practice-board { flex: 1 1 auto; width: 100%; height: 100%; min-height: 0; border: 0; display: block; }
+
+/* guided layout: a step-by-step page for the first visit */
+.lp-guided > :not(.lp-top) { margin: 0 16px; }
+.lp-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; flex-wrap: wrap; }
+.lp-head h2 { margin: 0 0 6px; font-size: 22px; line-height: 1.2; font-weight: 700; }
+.lp-sub { margin: 0; max-width: 760px; color: var(--muted); line-height: 1.55; }
+.lp-flow { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.lp-flow li { display: flex; align-items: center; gap: 6px; padding: 5px 10px 5px 6px; border: 1px solid var(--line); border-radius: 999px; background: var(--card); color: var(--muted); font-size: 12.5px; font-weight: 600; }
+.lp-flow b { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font-size: 11px; }
+.lp-card { overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: var(--card); box-shadow: var(--shadow); }
+.lp-step-head { display: flex; align-items: flex-start; gap: 12px; padding: 14px 16px; }
+.lp-step-head h3 { margin: 0; font-size: 15px; font-weight: 650; line-height: 1.3; }
+.lp-step-head p { margin: 3px 0 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
+.lp-num { flex: 0 0 auto; display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: var(--accent); color: var(--accent-ink); font-size: 12.5px; font-weight: 700; }
+html.std-ui .lp .practice-reference-card summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 16px 0 0; cursor: pointer; list-style: none; font-weight: 400; }
+html.std-ui .lp .practice-reference-card summary::before { content: none; }
+.lp-toggle { flex: 0 0 auto; padding: 6px 12px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink); font-size: 13px; font-weight: 600; }
+.lp .practice-reference-card summary:hover .lp-toggle { border-color: var(--accent); color: var(--accent); }
+.lp-study { display: grid !important; grid-template-columns: minmax(0, 1.6fr) minmax(260px, 1fr); border-top: 1px solid var(--line); }
+.lp-study .practice-reference-canvas { position: relative; border-right: 1px solid var(--line); }
+.lp-study .practice-reference { display: block; width: 100%; height: 360px; border: 0; }
+.lp-study .practice-reference-learn { padding: 14px 16px; }
+.lp-guided .lp-work { display: block; overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: var(--card); }
+.lp-build-head { border-bottom: 1px solid var(--line); }
+html.std-ui .lp-guided .lp-build .practice-board { height: calc(100vh - 90px); min-height: 640px; }
+
+@media (max-width: 1280px) { .lp-work { --lp-ref-w: 320px; } .lp-title { display: none; } }
+@media (max-width: 1000px) {
+  .lp-top { flex-wrap: wrap; }
+  .lp-strip { order: 3; flex-basis: 100%; }
+  .lp-tools { margin-left: auto; }
+  .lp:not(.lp-focus) { height: auto !important; }
+  .lp-work { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(620px, 1fr); }
+  .lp.lp-focus .lp-work { grid-template-rows: minmax(0, 1fr); }
+  .lp-ref { border-right: 0; border-bottom: 1px solid var(--line); max-height: 46vh; }
+  html.std-ui .lp:not(.lp-focus) .lp-build .practice-board { min-height: 620px; }
+  .lp-study { grid-template-columns: 1fr; }
+  .lp-study .practice-reference-canvas { border-right: 0; border-bottom: 1px solid var(--line); }
+}
+@media (max-width: 640px) {
+  .lp-seg button { padding: 5px 7px; font-size: 12px; }
+  .lp-head h2 { font-size: 19px; }
+  .lp .practice-reference-card summary { flex-direction: column; align-items: stretch; padding: 0 16px 14px 0; }
+}
+
+/* level switch and first-visit chooser */
+.lp-level button[aria-pressed="true"] { color: var(--accent) !important; }
+.lp-choose { height: auto !important; min-height: calc(100vh - 40px); display: grid; place-items: center; padding: 24px; }
+.lp-choose-box { width: min(980px, 100%); }
+.lp-choose-box h2 { margin: 4px 0 6px; font-size: 26px; }
+.lp-levels { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 18px; }
+.lp-levels button { display: flex; flex-direction: column; gap: 8px; padding: 18px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); color: var(--ink); text-align: left; font: inherit; cursor: pointer; }
+.lp-levels button:hover { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.lp-levels b { font-size: 17px; } .lp-levels span { color: var(--muted); line-height: 1.5; } .lp-levels em { margin-top: auto; padding-top: 8px; border-top: 1px solid var(--line); color: var(--ink); font-style: normal; font-size: 12.5px; }
+@media (max-width: 760px) { .lp-levels { grid-template-columns: 1fr; } }

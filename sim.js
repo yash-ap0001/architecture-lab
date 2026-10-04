@@ -193,8 +193,20 @@
     return custom != null ? +custom : (RTT[key] != null ? RTT[key] : 100);
   }
 
+  // Monthly teaching cost of one box. `live` / `nodesNow` are the instances or pool nodes running right now.
+  function nodeCost(d, p, live, nodesNow) {
+    const cls = d.cls;
+    if (cls === "db") return (p.shards || 1) * ((d.cost || 0) + (p.replicas || 0) * (d.rep || 0) + (p.ha ? 150 : 0));
+    if (cls === "store" || cls === "cache") return (p.inst || 1) * (d.cost || 0);
+    if (cls === "queue") return (d.cost || 0) + (p.workers || 1) * (d.unit || 45);
+    if (cls === "router" || cls === "proxy" || cls === "service") return (live || p.inst || 1) * (d.cost || 0) + (cls === "router" && p.ha ? d.cost || 0 : 0);
+    if (cls === "pool") return (nodesNow || +p.nodes || 1) * (d.cost || 0);
+    if (cls === "limiter" || cls === "cdn" || cls === "passive") return d.cost || 0;
+    return 0;
+  }
+
   // ---------------------------------------------------------------- simulation
-  /* opts: { scenario, trafficMult, chaos: { dbDown, cacheFlush, lbDown, azOut, slowDb }, k: overrides } */
+  /* opts:{ scenario, trafficMult, chaos: { dbDown, cacheFlush, lbDown, azOut, slowDb }, k: overrides } */
   function createSim(graph, scenario) {
     const m = build(graph); if (m.error) return { error: m.error };
     const sc = Object.assign({}, DEFAULT_SCENARIO, scenario || {});
@@ -469,17 +481,12 @@
     // stats
     let cost = 0, maxDelay = 0, stale = 0;
     for (const id of m.order) {
-      const n = m.nodes[id], ns = st.nodes[id], d = n.def, p = n.p, cls = d.cls;
-      if (cls === "db") cost += (p.shards || 1) * ((d.cost || 0) + (p.replicas || 0) * (d.rep || 0) + (p.ha ? 150 : 0));
-      else if (cls === "store") cost += (p.inst || 1) * d.cost;
-      else if (cls === "queue") cost += d.cost + (p.workers || 1) * (d.unit || 45);
-      else if (["router", "proxy", "service"].includes(cls)) cost += (ns.live || p.inst || 1) * (d.cost || 0) * (p.ha ? 2 : 1) / (p.ha ? 2 : 1) + (cls === "router" && p.ha ? d.cost : 0);
-      else if (cls === "pool") cost += (ns.nodesNow || +p.nodes || 1) * (d.cost || 0);
-      else if (cls === "cache") cost += (p.inst || 1) * d.cost; else if (cls === "limiter" || cls === "cdn" || cls === "passive") cost += d.cost || 0;
+      const n = m.nodes[id], ns = st.nodes[id];
+      ns.cost = nodeCost(n.def, n.p, ns.live, ns.nodesNow); cost += ns.cost;
       maxDelay = Math.max(maxDelay, ns.delaySec || 0); stale = Math.max(stale, ns.stale || 0);
     }
     const rec = { t, rps: R, p95: Math.min(p95, 20000), ok: clamp(ok, 0, 1), err: clamp(1 - ok, 0, 1), degraded: leaves.tot > 0 ? clamp(leaves.degraded / leaves.tot, 0, 1) : 0, cost, delayMin: maxDelay / 60, stale, edgeFlow, nodes: {} };
-    for (const id of m.order) { const ns = st.nodes[id]; rec.nodes[id] = { util: ns.util, load: ns.load, ms: ns.ms, hit: ns.hit || 0, backlog: ns.backlog, live: ns.live, down: !!ns.down || !!ns.killed || !!(live.down && live.down[id]), brkOpen: Object.values(ns.brk || {}).some((b) => b.open), cons: ns.consistency || "", nodes: ns.nodesNow || 0, pending: ns.pending || 0, badErr: ns.badErr || 0, aliveN: ns.aliveN || 0, groupN: ns.groupN || 0, lag: ns.lagSec || 0, conflict: ns.conflict || 0, rpo: ns.rpoLost || 0, unhealthy: !!st.unhealthy[id] }; }
+    for (const id of m.order) { const ns = st.nodes[id]; rec.nodes[id] = { util: ns.util, load: ns.load, ms: ns.ms, hit: ns.hit || 0, backlog: ns.backlog, live: ns.live, down: !!ns.down || !!ns.killed || !!(live.down && live.down[id]), brkOpen: Object.values(ns.brk || {}).some((b) => b.open), cons: ns.consistency || "", nodes: ns.nodesNow || 0, pending: ns.pending || 0, badErr: ns.badErr || 0, aliveN: ns.aliveN || 0, groupN: ns.groupN || 0, lag: ns.lagSec || 0, conflict: ns.conflict || 0, rpo: ns.rpoLost || 0, unhealthy: !!st.unhealthy[id], cost: ns.cost || 0 }; }
     st.history.push(rec); if (st.history.length > 360) st.history.shift();      // keep about three simulated hours; totals below are cumulative
     st.okSum += ok * legit; st.reqSum += legit; st.costLast = cost; st.t += 1;
     return rec;
@@ -491,7 +498,8 @@
     for (const x of sorted) { acc += x.w / tw; if (acc >= 0.95) { p95 = x.p; break; } }
     const peak = h.reduce((mx, x) => (x.rps > mx.rps ? x : mx), h[0] || { rps: 0, nodes: {} });
     const busiest = Object.entries(peak.nodes || {}).filter(([id]) => st.m.nodes[id].def.cls !== "source").sort((a, b) => b[1].util - a[1].util)[0];
-    return { p95, availability: st.reqSum > 0 ? st.okSum / st.reqSum : 1, cost: st.costLast || 0, peakRps: peak.rps, maxDelayMin: Math.max(0, ...h.map((x) => x.delayMin)), staleMax: Math.max(0, ...h.map((x) => x.stale)),
+    const last = h[h.length - 1] || { nodes: {} };
+    return { p95, availability: st.reqSum > 0 ? st.okSum / st.reqSum : 1, cost: st.costLast || 0, costByNode: Object.fromEntries(Object.entries(last.nodes).map(([id, x]) => [id, x.cost || 0])), peakLoad: Object.fromEntries(Object.entries(peak.nodes || {}).map(([id, x]) => [id, x.load || 0])), peakRps: peak.rps, maxDelayMin: Math.max(0, ...h.map((x) => x.delayMin)), staleMax: Math.max(0, ...h.map((x) => x.stale)),
       busiest: busiest ? { id: busiest[0], name: st.m.nodes[busiest[0]].p.name, util: busiest[1].util } : null };
   }
 
@@ -505,7 +513,7 @@
     return { st, summary: summarize(st) };
   }
 
-  const api = { TICKS, TICK_S, K, CATALOG, BY_ID, CATS, extend, equivalents, CLASSES, defaultProps, DEFAULT_SCENARIO, trafficCurve, build, routes, createSim, step, summarize, run };
+  const api = { TICKS, TICK_S, K, CATALOG, BY_ID, CATS, extend, equivalents, CLASSES, defaultProps, DEFAULT_SCENARIO, trafficCurve, build, routes, createSim, step, summarize, run, nodeCost };
   if (typeof module === "object" && module.exports) { try { api.extend(require("./catalog_more.js")); } catch (e) { /* optional */ } try { api.extend(require("./catalog_more2.js")); } catch (e) { /* optional */ } }
   return api;
 });

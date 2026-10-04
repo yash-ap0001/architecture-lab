@@ -6,8 +6,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="description" content="A free canvas for system design: draw any architecture, run live traffic, inject failures, and see what breaks.">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
-<link rel="stylesheet" href="sandbox.css?v=20261002d-ref-height-fix">
+<link rel="stylesheet" href="sandbox.css?v=20261004y">
 <link rel="stylesheet" href="theme-tactical.css">
+<link rel="stylesheet" href="studio-shell.css?v=20261004z">
 <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
 <script src="theme.js"></script>
 <script src="embed-flags.js"></script>
@@ -33,9 +34,10 @@
     <button data-tool="connect" title="Connect two boxes (C)" aria-pressed="false">↔ Connect</button>
     <button id="undo" title="Undo (Ctrl+Z)">↶</button><button id="redo" title="Redo (Ctrl+Y)">↷</button><button data-act="deleteSelected" title="Select a component or wire, then delete it">Delete</button><button data-act="resetSimple" title="Reset the canvas to a simple starter">Reset</button>
     <button id="zoomOut" title="Zoom out (−)">−</button><button id="zoomReset" title="Reset zoom">100%</button><button id="zoomIn" title="Zoom in (+)">+</button><button id="fit" title="Fit everything">Fit</button>
+    <button data-act="layout" title="Arrange boxes by request flow and layer (locked boxes stay; Undo restores)">⇶ Layout</button><select id="viewSel" title="View the same canvas by concern" aria-label="Canvas view"></select>
   </div>
   <div id="levelControls" role="toolbar" aria-label="Architecture levels" hidden>
-    <span>Levels</span><button data-level-toggle="1" title="Level 1: system canvas">L1</button><button data-level-toggle="2" title="Level 2: internal design of the selected component" disabled>L2</button><button data-level-toggle="3" title="Level 3: implementation detail" disabled>L3</button><button data-level-reset title="Back to Level 1">Reset</button>
+    <span>Levels</span><button data-level-toggle="1" title="Level 1: system canvas">L1</button><button data-level-toggle="2" title="Level 2: internal design of the selected component" disabled>L2</button><button data-level-toggle="3" title="Level 3: implementation detail" disabled>L3</button><button data-level-reset title="Back to Level 1 (system canvas)">Back to L1</button>
   </div>
 </header>
 <div id="main">
@@ -49,7 +51,7 @@
     <div class="ai-deck-head"><span class="level-badge">LEVEL 1</span><span class="architect-kicker">SYSTEM CANVAS</span><b>AI design input</b><p>Choose the system before it is drawn.</p><span class="ai-deck-head-btns"><button id="deckWide" title="Make the panel wider or narrower">⤢ Expand</button><button id="deckHide" title="Collapse this panel (more room for the canvas)">Collapse</button></span></div>
   </aside>
   <div id="levelStack">
-  <div id="stage"><button id="sideShow" hidden title="Show the panel">◂ Panel</button><button id="deckShow" hidden title="Show the AI design panel">AI Panel ▸</button><button id="partsShow" hidden title="Show the component panel">Components</button><svg id="board" role="application" aria-label="Design board"></svg><div id="hint" class="hint"></div><div id="banner" class="banner" hidden></div>
+  <div id="stage"><button id="sideShow" hidden title="Show the panel">◂ Panel</button><button id="deckShow" hidden title="Show the AI design panel">AI Panel ▸</button><button id="partsShow" hidden title="Show the component panel">Components</button><svg id="board" role="application" aria-label="Design board"></svg><nav id="studioRail" aria-label="Design studio"><button id="reqBtn" title="Requirements, clarifying questions and assumptions"><i>📋</i><span>Requirements</span><em id="reqPill"></em></button><button id="optBtn" title="Lean, Balanced and Enterprise versions of this canvas, plus the architecture style and service count"><i>🧭</i><span>Options</span></button><button id="simBtn" title="Simulation Lab: 20 traffic, failure, security and AI scenarios with what-if controls"><i>🧪</i><span>Simulate</span><em id="simPill"></em></button><button id="lintBtn" title="Architecture checks: security, reliability, cost, AI and compliance (all levels)"><i>⚠</i><span>Checks</span><em id="lintPill"></em></button><button id="costBtn" title="Budget and cost plan for everything on this canvas (all levels)"><i>$</i><span>Cost</span><em id="costPill"></em></button><button id="verBtn" title="Save, compare, restore and approve versions of this canvas"><i>🕘</i><span>Versions</span></button><button id="readyBtn" title="Readiness level, score, blocking items and the final report"><i>✓</i><span>Readiness</span></button><button id="exportBtn" title="Export HLD, LLD, API plan, database, events, sequences, DevOps, threat model, DR, tests, roadmap and cost plan; save and share the project"><i>📦</i><span>Export</span></button></nav><svg id="minimap" hidden aria-label="Minimap: click to move there"></svg><div id="multiBar" class="multi-bar" hidden></div><div id="hint" class="hint"></div><div id="banner" class="banner" hidden></div>
   </div>
   <aside id="side">
     <div id="sideGrip" title="Drag to resize"></div>
@@ -75,23 +77,32 @@
   <div class="grp"><button id="play" class="play">▶ Start</button><button id="stop" title="Stop and clear results">■</button></div>
   <div class="grp"><span class="lbl">Speed</span><span class="seg" id="speed"><button data-v="0.5">0.5×</button><button data-v="1" aria-pressed="true">1×</button><button data-v="2.5">2.5×</button><button data-v="5">5×</button></span></div>
   <div class="grp"><span class="lbl">Traffic</span><input id="mult" type="range" min="0" max="5" step="0.25" value="1" aria-label="Traffic multiplier"><output id="multOut">1×</output></div>
-  <div class="grp chaos"><span class="lbl">Break it</span>
+  <details class="chaos chaos-menu"><summary title="Break something while the simulation runs">⚡ Inject failure<b id="chaosCount"></b></summary><div class="chaos-list"><p>Press Start first, then toggle a failure on and off while traffic runs.</p>
     <button data-chaos="dbDown" title="Database primary fails">🗄️ DB down</button><button data-chaos="cacheFlush" title="Cache is flushed">⚡ Cache flush</button><button data-chaos="lbDown" title="Load balancer fails (unless HA)">⚖️ LB down</button>
-    <button data-chaos="azOut" title="A zone goes dark: half the capacity">🌪 Zone out</button><button data-chaos="partition" title="The network between regions is cut">✂️ Partition</button><span id="regionChaos"></span><button data-chaos="burst" title="Traffic jumps 60% for a moment">🔁 Burst</button><button data-chaos="slowDb" title="Database 4× slower">🐌 Slow DB</button></div>
+    <button data-chaos="azOut" title="A zone goes dark: half the capacity">🌪 Zone out</button><button data-chaos="partition" title="The network between regions is cut">✂️ Partition</button><span id="regionChaos"></span><button data-chaos="burst" title="Traffic jumps 60% for a moment">🔁 Burst</button><button data-chaos="slowDb" title="Database 4× slower">🐌 Slow DB</button></div></details>
   <div class="kpis" id="kpis" aria-live="off"></div>
 </footer>
 <input id="file" type="file" accept="application/json,.json" hidden>
+<dialog id="simDlg" class="cost-dialog" aria-labelledby="simTitle"><div class="cost-head"><b id="simTitle">Simulation Lab</b><button id="simClose" aria-label="Close">&times;</button></div><div id="simBody"></div></dialog>
+<dialog id="exportDlg" class="cost-dialog" aria-labelledby="exportTitle"><div class="cost-head"><b id="exportTitle">Export and share</b><button id="exportClose" aria-label="Close">&times;</button></div><div id="exportBody"></div></dialog>
+<dialog id="changeDlg" class="cost-dialog" aria-labelledby="changeTitle"><div class="cost-head"><b id="changeTitle">Proposed change</b><button id="changeClose" aria-label="Close">&times;</button></div><div id="changeBody"></div></dialog>
+<dialog id="verDlg" class="cost-dialog" aria-labelledby="verTitle"><div class="cost-head"><b id="verTitle">Versions</b><button id="verClose" aria-label="Close">&times;</button></div><div id="verBody"></div></dialog>
+<dialog id="reqDlg" class="cost-dialog" aria-labelledby="reqTitle"><div class="cost-head"><b id="reqTitle">Requirements</b><button id="reqClose" aria-label="Close">&times;</button></div><div id="reqBody"></div></dialog>
+<dialog id="optDlg" class="cost-dialog" aria-labelledby="optTitle"><div class="cost-head"><b id="optTitle">Architecture options</b><button id="optClose" aria-label="Close">&times;</button></div><div id="optBody"></div></dialog>
+<dialog id="readyDlg" class="cost-dialog" aria-labelledby="readyTitle"><div class="cost-head"><b id="readyTitle">Implementation readiness</b><button id="readyClose" aria-label="Close">&times;</button></div><div id="readyBody"></div></dialog>
+<dialog id="lintDlg" class="cost-dialog" aria-labelledby="lintTitle"><div class="cost-head"><b id="lintTitle">Architecture checks</b><button id="lintClose" aria-label="Close">&times;</button></div><div id="lintBody"></div></dialog>
+<dialog id="costPlan" class="cost-dialog" aria-labelledby="costTitle"><div class="cost-head"><b id="costTitle">Budget &amp; cost plan</b><button id="costClose" aria-label="Close">&times;</button></div><div id="costBody"></div></dialog>
 <dialog id="memory"><h2>YashAI Architecture Library</h2><p class="muted">Saved on this PC in shared YashAI memory.</p><div id="memoryList"></div><form method="dialog"><button>Close</button></form></dialog>
 <dialog id="help"><h2>Sandbox help</h2>
   <ul><li><b>Add:</b> click a component, or drag it onto the board.</li><li><b>Connect:</b> drag from the dot on a box's right edge to another box, or use ↔ Connect and click two boxes.</li>
-  <li><b>Move:</b> drag a box. <b>Pan:</b> drag empty space, or hold Space. <b>Zoom:</b> mouse wheel.</li><li><b>Edit:</b> click a box, then the <i>Selected</i> tab. <b>Delete:</b> Delete key. <b>Undo:</b> Ctrl+Z.</li>
-  <li><b>Run:</b> ▶ Start. Change traffic, speed and failures while it runs.</li><li>The model is a teaching model; its numbers are not benchmarks. Edit any number in <i>Selected</i>, and mark numbers you measured in the design brief.</li></ul>
+  <li><b>Move:</b> drag a box. <b>Pan:</b> drag empty space, or hold Space. <b>Zoom:</b> mouse wheel. <b>Minimap:</b> click it to jump.</li><li><b>Select several:</b> Shift-click boxes or Shift-drag on empty space; drag one to move them all. Ctrl+A selects everything, Ctrl+D duplicates, L locks or unlocks, Esc clears.</li><li><b>Edit:</b> click a box; its settings open in the <i>Inspect</i> panel. <b>Delete:</b> Delete key. <b>Undo:</b> Ctrl+Z.</li>
+  <li><b>Run:</b> ▶ Start. Change traffic, speed and failures while it runs.</li><li>The model is a teaching model; its numbers are not benchmarks. Edit any number in <i>Inspect</i>, and mark numbers you measured in the design brief.</li></ul>
   <form method="dialog"><button>Close</button></form></dialog>
 <script src="sim.js"></script>
 <script src="catalog_more.js"></script>
-<script src="catalog_more2.js"></script>
-<script src="catalog_docs.js"></script>
-<script src="catalog_alts.js"></script>
+<script src="catalog_more2.js?v=20261002a"></script>
+<script src="catalog_docs.js?v=20261002a"></script>
+<script src="catalog_alts.js?v=20261002a"></script>
 <script src="presets.js"></script>
 <script src="platforms.js"></script>
 <script src="platform_sizes.js"></script>
@@ -106,6 +117,15 @@
 <script src="lld.js"></script>
 <script src="collapse.js"></script>
 <script src="board.js"></script>
-<script src="sandbox.js?v=20261002h-public"></script>
+<script src="diff.js?v=20261002b"></script>
+<script src="lint.js?v=20261002a"></script>
+<script src="report.js?v=20261002c"></script>
+<script src="requirements.js?v=20261002a"></script>
+<script src="fixes.js?v=20261002a"></script>
+<script src="cost.js?v=20261002c"></script>
+<script src="studio.js?v=20261002a"></script>
+<script src="scenarios.js?v=20261002a"></script>
+<script src="exports.js?v=20261002a"></script>
+<script src="sandbox.js?v=20261005b"></script>
 </body>
 </html>

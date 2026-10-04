@@ -634,7 +634,7 @@
   }
   function flash(btn, msg) { const t = btn.textContent; btn.textContent = msg; setTimeout(() => { btn.textContent = t; }, 1500); }
 
-  function render() { if (mode === "practice") return practiceView(); if (mode === "studio") return studioView(); if (mode === "studio-home") return studioHome(); level ? levelView() : home(); }
+  function render() { document.documentElement.classList.toggle("std-ui", mode === "practice"); if (mode === "practice") return practiceView(); if (mode === "studio") return studioView(); if (mode === "studio-home") return studioHome(); level ? levelView() : home(); }
 
   function practiceView() {
     const embedded = document.documentElement.classList.contains("control-room-embed");
@@ -656,21 +656,53 @@
       ["global", "Global failover app", "Keep a worldwide app available through region routing, replicated data, and controlled failover.",
         "Users in different regions are routed to the nearest healthy region by a global load balancer, so normal traffic never crosses an ocean. Data is replicated between regions so a failover doesn't mean starting from zero. The interesting part is the failure case: when one region goes down, traffic has to shift to the other region's capacity, which means that region needs enough spare capacity to absorb it. Try the region-failure simulation and watch what the surviving region's load looks like."]
     ];
-    const current = examples.find((x) => x[0] === practiceExample);
-    const refSrc = `sandbox.html?reference=1&example=${practiceExample}&embed=${embedded ? "control-room" : "none"}`;
+    const lvl = learnLevel();
+    if (!lvl) {
+      $title.textContent = "Reference practice"; $back.hidden = directPractice; $total.textContent = "";
+      $app.innerHTML = `<section class="practice-shell lp lp-choose"><div class="lp-choose-box"><p class="lp-eyebrow">Learn system design by building</p><h2>Where are you starting?</h2><p class="lp-sub">Pick the level that sounds like you. It decides how much help you get and which systems you build first. You can change it any time.</p>
+        <div class="lp-levels">${LEARN_LEVELS.map(([k, l, d]) => `<button type="button" data-learn-level="${k}"><b>${l}</b><span>${d}</span><em>${examples.filter(([id]) => EX_LEVEL[id] === k).map(([, t]) => esc(t)).join(" · ")}</em></button>`).join("")}</div></div></section>`;
+      return;
+    }
+    if (EX_LEVEL[practiceExample] !== lvl) practiceExample = (examples.find(([id]) => EX_LEVEL[id] === lvl) || examples[0])[0];
+    const mine = examples.filter(([id]) => EX_LEVEL[id] === lvl);
+    const current = examples.find((x) => x[0] === practiceExample), idx = mine.indexOf(current);
+    const refSrc = `sandbox.html?reference=1&example=${practiceExample}${lvl === "advanced" ? "" : "&core=1"}&embed=${embedded ? "control-room" : "none"}`;
+    currentRef = { src: refSrc, title: current[1] };
     $title.textContent = "Reference practice"; $back.hidden = directPractice; $total.textContent = "";
-    $app.innerHTML = `<section class="practice-shell">
-      <header class="practice-head"><div class="practice-intro"><span class="cr-badge">Learn by rebuilding</span><h2>${esc(current[1])}</h2><p>${esc(current[2])}</p><div class="practice-meta"><span>Guided exercise</span><span>Reference included</span><span>Build → simulate → review</span></div></div><div class="practice-actions"><button class="ghost" data-toggle-practice-library="1">${practiceLibraryOpen ? "Close examples" : "Browse examples"}</button><label>Example <select data-practice-example>${examples.map(([id, label]) => `<option value="${id}" ${id === practiceExample ? "selected" : ""}>${label}</option>`).join("")}</select></label><button class="primary practice-review" data-practice-review="1">Review my design</button></div></header>
-      ${practiceLibraryOpen ? `<section class="practice-library" aria-label="System design example library"><div class="practice-library-head"><div><b>Example library</b><small>Open any example to read its goal and load its reference diagram.</small></div><span>${examples.length} systems</span></div><div class="practice-library-grid">${examples.map(([id, title, description]) => `<article class="practice-example ${id === practiceExample ? "selected" : ""}"><span>${id === practiceExample ? "OPEN" : "EXAMPLE"}</span><h3>${esc(title)}</h3><p>${esc(description)}</p><button data-practice-pick="${id}">${id === practiceExample ? "Viewing diagram" : "Open diagram"}</button></article>`).join("")}</div></section>` : ""}
-      <details class="practice-reference-card" ${referenceVisible ? "open" : ""}><summary><span>Reference design · ${esc(current[1])}</span><small>Request path and components · click to ${referenceVisible ? "collapse" : "expand"}</small></summary>
-        <div class="practice-reference-body">
-          <div class="practice-reference-canvas"><button class="ghost practice-reference-pop" data-open-reference-dialog="1" data-ref-title="${esc(current[1])}" data-ref-src="${refSrc}">⤢ Open full size</button><iframe class="practice-reference" src="${refSrc}" title="${esc(current[1])} reference architecture"></iframe></div>
-          <div class="practice-reference-learn"><b>What to learn from this design</b><p>${esc(current[3])}</p></div>
-        </div>
-      </details>
-      <section class="practice-step practice-draw"><div class="practice-step-head"><span>Build</span><div><b>Your playground</b><small>Choose a component on the right, place it on the canvas, then connect the request flow.</small></div><em>Start with the entry point</em></div><iframe id="practiceBoard" class="practice-board" src="sandbox.html?practice=1&tab=architect&embed=${embedded ? "control-room" : "none"}" title="Your architecture canvas"></iframe></section>
+    const layout = learnLayout(lvl), boardSrc = `sandbox.html?practice=1&tab=architect&guide=${practiceExample}&level=${lvl}&embed=${embedded ? "control-room" : "none"}`;
+    const notes = `<b>What to learn from this design</b><p>${esc(current[3])}</p>
+      <b>Before you rebuild</b><ul class="lp-check"><li>Follow one request from the client to where the data lives.</li><li>Find the box that absorbs most of the load, and why.</li><li>Name what breaks first if one box fails.</li></ul>`;
+    const refFrame = `<button class="ghost practice-reference-pop" data-open-reference-dialog="1" data-ref-title="${esc(current[1])}" data-ref-src="${refSrc}">Open full size</button><iframe class="practice-reference" src="${refSrc}" title="${esc(current[1])} reference architecture"></iframe>`;
+    const LAYOUTS = [["split", "Show reference", "Reference on the left, your canvas on the right"], ["focus", "Canvas only", "Hide the reference and use the whole width"]];
+    $app.innerHTML = `<section class="practice-shell lp lp-${layout}">
+      <header class="lp-top">
+        <div class="lp-seg lp-level" role="group" aria-label="Your level">${LEARN_LEVELS.map(([k, l]) => `<button type="button" data-learn-level="${k}" aria-pressed="${lvl === k}">${l}</button>`).join("")}</div>
+        <div class="lp-strip" role="radiogroup" aria-label="Pick a system">${mine.map(([id, title, description], i) => `<button type="button" role="radio" aria-checked="${id === practiceExample}" class="lp-chip" data-practice-pick="${id}" title="${esc(description)}"><small>${i + 1}</small>${esc(title)}</button>`).join("")}</div>
+        <div class="lp-tools"><div class="lp-seg" role="group" aria-label="Layout">${LAYOUTS.map(([k, label, tip]) => `<button type="button" data-lp-layout="${k}" aria-pressed="${layout === k}" title="${tip}">${label}</button>`).join("")}</div><button type="button" class="lp-icon" data-lp-full="1" title="Full screen (Esc to leave)" aria-label="Full screen">⛶</button><button class="primary practice-review" data-practice-review="1">Review my design</button></div>
+      </header>
+      <div class="lp-work" id="lpWork">
+        <aside class="lp-ref" aria-label="Reference design"><div class="lp-ref-head"><b>Reference: ${esc(current[1])}</b><span>${esc(current[2])} (system ${idx + 1} of ${mine.length} at this level)</span></div><div class="practice-reference-canvas">${refFrame}</div><div class="practice-reference-learn">${notes}</div></aside>
+        <section class="practice-draw lp-build" aria-label="Your canvas">
+          <iframe id="practiceBoard" class="practice-board" src="${boardSrc}" title="Your architecture canvas" allow="fullscreen"></iframe>
+        </section>
+      </div>
     </section>`;
   }
+  const LEARN_LEVELS = [["beginner", "Beginner", "New to system design. Step-by-step help in plain words, only the basic parts."], ["intermediate", "Intermediate", "I know servers, databases and APIs. A checklist and hints, all components."], ["advanced", "Advanced", "I design real systems. Just the goal: build it, meet the numbers, survive failures."]];
+  const EX_LEVEL = { urlshort: "beginner", news: "beginner", events: "beginner", payments: "intermediate", rag: "intermediate", jobs: "intermediate", storm: "advanced", global: "advanced" };
+  let currentRef = null;
+  function learnLevel() { let v = ""; try { v = localStorage.getItem("yashai.level") || ""; } catch (e) { /* ignore */ } return LEARN_LEVELS.some(([k]) => k === v) ? v : ""; }
+  function learnLayout(lvl) {
+    let v = ""; try { v = localStorage.getItem("archlab.learn.layout") || ""; } catch (e) { /* ignore */ }
+    return ["split", "focus"].includes(v) ? v : lvl === "beginner" || innerWidth < 1100 ? "focus" : "split";
+  }
+  window.addEventListener("message", (e) => {
+    if (!e.data || e.data.type !== "archlab-open-reference" || !currentRef) return;
+    const dlg = document.getElementById("referenceDialog");
+    document.getElementById("referenceDialogTitle").textContent = "Reference design · " + currentRef.title;
+    document.getElementById("referenceDialogFrame").src = currentRef.src;
+    if (dlg && typeof dlg.showModal === "function" && !dlg.open) dlg.showModal();
+  });
 
   // ---------------------------------------------------------------- events
   function setPath(path, val) {
@@ -692,6 +724,20 @@
       mode = "playground"; level = null; return render();
     }
     if (t.dataset.openPractice) { mode = "practice"; level = null; return render(); }
+    if (t.dataset.learnLevel) { try { localStorage.setItem("yashai.level", t.dataset.learnLevel); localStorage.removeItem("archlab.learn.layout"); } catch (x) { /* ignore */ } return render(); }
+    if (t.dataset.lpLayout) {
+      const v = t.dataset.lpLayout, shell = document.querySelector(".lp"); try { localStorage.setItem("archlab.learn.layout", v); } catch (x) { /* ignore */ }
+      if (!shell || (v === "guided") !== shell.classList.contains("lp-guided")) return render();
+      shell.classList.remove("lp-split", "lp-focus"); shell.classList.add("lp-" + v);   // no re-render: keeps the canvas iframe and its work
+      document.querySelectorAll("[data-lp-layout]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.lpLayout === v)));
+      return;
+    }
+    if (t.dataset.lpFull) {
+      const w = document.getElementById("lpWork");
+      if (document.fullscreenElement) { document.exitFullscreen(); return; }
+      if (w && w.requestFullscreen) w.requestFullscreen().catch(() => flash(t, "Full screen is blocked here"));
+      return;
+    }
     if (t.dataset.openReferenceDialog) {
       const dlg = document.getElementById("referenceDialog");
       document.getElementById("referenceDialogTitle").textContent = "Reference design · " + t.dataset.refTitle;
@@ -782,8 +828,8 @@
     // Patch just the label in place instead of a full render() -- re-rendering here would
     // regenerate the reference and playground <iframe> tags, reloading both (and losing whatever
     // the user had just drawn) just because they expanded a summary.
-    const label = e.target.querySelector("summary small");
-    if (label) label.textContent = `Request path and components · click to ${referenceVisible ? "collapse" : "expand"}`;
+    const label = e.target.querySelector("summary .lp-toggle");
+    if (label) label.textContent = referenceVisible ? "Hide reference" : "Show reference";
     // A closed <details> has zero-size content, so the reference iframe's own first fitView()
     // ran against a 0x0 board and produced a degenerate zoom/pan; its resize-observer treats the
     // next (now-real-size) measurement as a fresh baseline rather than a change, so it never
