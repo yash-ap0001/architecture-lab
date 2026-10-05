@@ -2562,7 +2562,7 @@
         : !doc.nodes.length && !doc.guide.tried ? `<div class="g-watch"><b>New to this? Watch first.</b><p>We build this system for you, one box at a time, and explain every step in plain words. Then it is your turn.</p><div class="g-act"><button type="button" class="primary-sm" data-guide="watch">▶ Watch it being built</button></div></div>` : ""}
       ${goal}${demo ? "" : failBox}${list}
       ${cur < 0 ? `<div class="g-done"><b>Well done!</b><p>You rebuilt the ${esc(guide.name)}, ran it, broke it and got a review. Try the next system, or move up a level at the top of the page.</p></div>` : ""}
-      <footer class="g-foot"><button type="button" data-guide="peek">Peek at the reference</button><button type="button" data-guide="fresh">Start over</button></footer>`;
+      <footer class="g-foot">${demo ? "" : `<button type="button" data-guide="watch">▶ Watch it built</button>`}<button type="button" data-guide="peek">Peek at the reference</button><button type="button" data-guide="fresh">Start over</button></footer>`;
     const nowEl = el.querySelector(".g-fail") || el.querySelector("li.now");   // keep the failure note or current step visible without scrolling the page around the frame
     if (nowEl && (nowEl.offsetTop < el.scrollTop || nowEl.offsetTop + nowEl.offsetHeight > el.scrollTop + el.clientHeight)) el.scrollTop = Math.max(0, nowEl.offsetTop - 120);
   }
