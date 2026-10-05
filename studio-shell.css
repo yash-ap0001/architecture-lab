@@ -286,3 +286,11 @@ body.studio-shell.has-guide #kpis { overflow: hidden; }
 }
 .change-actions { flex-wrap: wrap; }
 .change-actions .req-saved { flex-basis: 100%; margin: 0 0 4px; color: var(--ok); font-size: 12.5px; font-weight: 600; }
+
+/* Guide: the "watch first" card and the live caption while the system is being built for the learner. */
+#guidePanel .g-watch { padding: 12px; border-radius: 10px; background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); line-height: 1.5; }
+#guidePanel .g-watch b { display: block; font-size: 14.5px; }
+#guidePanel .g-watch small { display: block; margin-bottom: 4px; color: var(--accent); font-size: 11.5px; font-weight: 700; letter-spacing: .03em; text-transform: uppercase; }
+#guidePanel .g-watch p { margin: 6px 0 10px; font-size: 13.5px; }
+#guidePanel .g-watch .g-act { display: flex; flex-wrap: wrap; gap: 6px; }
+#guidePanel .g-watch.live { position: sticky; top: 0; z-index: 2; background: var(--card); box-shadow: inset 0 0 0 2px var(--accent), 0 6px 18px rgba(0, 0, 0, .12); }

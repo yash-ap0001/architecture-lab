@@ -6,7 +6,7 @@
     p.cat = p.cat || "Classics";
     if (p.id !== "start" && window.LabExamples) { const orig = p.build; p.coreBuild = orig; p.build = () => window.LabExamples.endToEnd(orig(), S.BY_ID); }
   });
-  if (window.LabExamples) window.LabExamples.LIST.forEach((e, i) => PRESETS.push({ id: "x" + i, name: e.name, cat: e.cat, notice: e.notice, build: () => Object.assign(window.LabExamples.build(e, S.BY_ID), e.blueprint ? { blueprint: e.blueprint } : {}) }));
+  if (window.LabExamples) window.LabExamples.LIST.forEach((e, i) => PRESETS.push({ id: "x" + i, name: e.name, cat: e.cat, notice: e.notice, coreBuild: () => window.LabExamples.build(Object.assign({}, e, { noE2E: true }), S.BY_ID), build: () => Object.assign(window.LabExamples.build(e, S.BY_ID), e.blueprint ? { blueprint: e.blueprint } : {}) }));
   const $ = (s) => document.querySelector(s), $$ = (s) => [...document.querySelectorAll(s)];
   const query = new URLSearchParams(location.search), referenceMode = query.get("reference") === "1", practiceMode = query.get("practice") === "1", referenceExample = query.get("example") || "urlshort";
   const guideId = practiceMode ? query.get("guide") || "" : "";
@@ -2392,6 +2392,31 @@
   const sentence1 = (t) => String(t || "").split(/(?<=\.)\s/)[0];
   const kindOf = (type) => { const d = S.BY_ID[type] || {}, ai = d.cat === "AI & ML"; return d.cls === "service" ? (ai ? "ai-service" : "service") : d.cls === "proxy" ? (ai ? "ai-proxy" : "proxy") : d.cls === "db" ? (ai ? "vector" : "db") : d.cls; };
   const sameJob = (a, b) => a === b || (!!S.BY_ID[a] && !!S.BY_ID[b] && !!S.BY_ID[a].eq && S.BY_ID[a].eq === S.BY_ID[b].eq) || kindOf(a) === kindOf(b);
+  /* What each kind of box is for, in words for someone who has never seen one. */
+  const PLAIN_JOB = {
+    source: "This is where requests come from: the people or programs that use the system.",
+    router: "It decides where each request should go, like a signpost at the entrance.",
+    cdn: "It keeps copies of pictures and pages close to the users, so most requests never reach your own servers.",
+    limiter: "A doorman: it lets a fair number of requests in and turns away floods.",
+    proxy: "It stands in front and hands each request to one of the servers behind it, so no single server is overloaded.",
+    service: "A program that does the actual work for each request.",
+    cache: "A fast short-term memory: it remembers recent answers so the slower database is asked less often.",
+    db: "Where the data is kept safely, so nothing is lost when a server restarts.",
+    queue: "A waiting line: work is dropped here and picked up a moment later, so a sudden burst does not overwhelm anyone.",
+    store: "Storage for big things such as files, pictures and videos.",
+    external: "A service run by another company that this system calls.",
+  };
+  function plainWire(a, b) {
+    const ca = S.BY_ID[a.type].cls, cb = S.BY_ID[b.type].cls, A = nameOf(a), B = nameOf(b);
+    if (ca === "cache" && cb === "db") return `When ${A} does not have the answer, the request goes on to ${B}.`;
+    if (cb === "cache") return `${A} asks ${B} first, because memory answers faster than a database.`;
+    if (cb === "queue") return `${A} drops the work into ${B} instead of doing it straight away.`;
+    if (ca === "queue") return `${B} picks the work up from ${A} at its own pace.`;
+    if (cb === "db") return `${A} reads and saves its data in ${B}.`;
+    if (cb === "store") return `${A} keeps its files in ${B}.`;
+    if (cb === "external") return `${A} calls ${B}, which is run by someone else.`;
+    return `Requests travel from ${A} to ${B}.`;
+  }
   function buildGuide() {
     const p = PRESETS.find((x) => x.id === guideId); if (!p) return null;
     const ref = JSON.parse(JSON.stringify((p.coreBuild || p.build)())), by = {};
@@ -2403,12 +2428,12 @@
     const steps = [], added = new Set(), wired = new Set();
     order.forEach((id) => {
       const n = by[id], d = S.BY_ID[n.type], own = n.props.name && n.props.name !== d.name;
-      steps.push({ kind: "add", ref: n, title: own ? `Add ${an(d.name)} for “${n.props.name}”` : `Add ${an(d.name)}`, why: sentence1(DOCS.D[n.type]) || d.name });
+      steps.push({ kind: "add", ref: n, title: own ? `Add ${an(d.name)} for “${n.props.name}”` : `Add ${an(d.name)}`, why: [PLAIN_JOB[d.cls] || "", own ? `In this system it is the “${n.props.name}”.` : "", sentence1(DOCS.D[n.type]) || ""].filter(Boolean).join(" ") || d.name });
       added.add(id);
       ref.edges.forEach((e, i) => {
         if (wired.has(i) || !((e.to === id && added.has(e.from)) || (e.from === id && added.has(e.to)))) return;
         wired.add(i); const a = by[e.from], b = by[e.to];
-        steps.push({ kind: "connect", ref: e, a, b, title: `Connect ${nameOf(a)} → ${nameOf(b)}`, why: e.fan ? `${nameOf(a)} also calls ${nameOf(b)} on every request, at the same time.` : e.failover ? "A backup path: used only when the main one fails." : e.only === "r" ? "Only reads go this way." : e.only === "w" ? "Only writes go this way." : `Requests travel from ${nameOf(a)} to ${nameOf(b)}.` });
+        steps.push({ kind: "connect", ref: e, a, b, title: `Connect ${nameOf(a)} → ${nameOf(b)}`, why: e.fan ? `${nameOf(a)} also calls ${nameOf(b)} on every request, at the same time.` : e.failover ? "A backup path: used only when the main one fails." : e.only === "r" ? "Only reads go this way." : e.only === "w" ? "Only writes go this way." : plainWire(a, b) });
       });
     });
     steps.push({ kind: "run", title: "Press ▶ Start to send traffic", why: `The simulator sends about ${num(ref.scenario.base)} requests per second through your design. Boxes turn green, amber or red by how busy they are.` });
@@ -2420,6 +2445,7 @@
   function initGuide() {
     guide = buildGuide(); if (!guide) return;
     if (!doc.guide || doc.guide.id !== guide.id) {
+      if (doc.guide) { doc.nodes = []; doc.edges = []; }      // another system was on the canvas: start this one clean
       doc.guide = { id: guide.id }; doc.name = "My " + guide.name; doc.scenario = Object.assign({}, S.DEFAULT_SCENARIO, guide.ref.scenario); doc.slo = Object.assign({}, guide.ref.slo);
       $("#title").value = doc.name; persist();
     }
@@ -2461,11 +2487,41 @@
   function noteGuide(k) { if (!doc || !doc.guide || doc.guide[k]) return; doc.guide[k] = true; persist(); paintGuide(); }
   function tidyLayout() { const r = STU.autoLayout(doc), pos = {}; r.doc.nodes.forEach((n) => { pos[n.id] = n; }); doc.nodes.forEach((n) => { if (pos[n.id] && !n.props.locked) { n.x = pos[n.id].x; n.y = pos[n.id].y; } }); commit(false); fitView(); }
   let guideSig = "";
+  /* Watch mode: for someone who has never done this. We build the reference design one step at a time (with its real
+   * sizes, so it carries the load), run it, break it and bring it back, saying in plain words what each step is for. */
+  let demo = null;
+  function demoStop(finished) {
+    if (!demo) return;
+    clearTimeout(demo.timer); demo = null; highlight.clear();
+    if (finished) { doc.guide.watched = true; persist(); }
+    Object.keys(chaos).forEach((k) => { chaos[k] = false; }); paintChaos(); render(); guideSig = ""; paintGuide();
+  }
+  function demoStart() {
+    if (doc.nodes.length && !window.confirm("Watching clears your canvas and builds this system from the start. Continue?")) return;
+    doc.nodes = []; doc.edges = []; doc.guide = { id: guide.id }; stop(); view = { x: 40, y: 20, z: 1 }; commit();
+    demo = { phase: "build", title: "", text: "", timer: 0 }; demoStep();
+  }
+  function demoStep() {
+    if (!demo || !guide) return;
+    const { done } = guideStatus(), i = done.indexOf(false), s = i >= 0 ? guide.steps[i] : null, build = guide.steps.filter((x) => x.kind === "add" || x.kind === "connect").length;
+    const show = (title, text, ms) => { demo.title = title; demo.text = text; guideSig = ""; paintGuide(); demo.timer = setTimeout(demoStep, ms); };
+    if (demo.phase === "build" && s && (s.kind === "add" || s.kind === "connect")) {
+      guideAction({ dataset: { guide: "do", i: String(i) } });
+      if (s.kind === "add") { const id = guideMap()[s.ref.id], n = id && node(id); if (n) { Object.assign(n.props, JSON.parse(JSON.stringify(s.ref.props))); commit(false); highlight = new Set([id]); render(); } }
+      else { const map = guideMap(); highlight = new Set([map[s.a.id], map[s.b.id]].filter(Boolean)); render(); }
+      return show(`Step ${i + 1} of ${build}: ${s.title}`, s.why, s.kind === "add" ? 3400 : 2200);
+    }
+    highlight.clear();
+    if (demo.phase === "build") { demo.phase = "run"; if (!running) start(); return show("Now we send traffic through it", `We pressed Start. About ${num(doc.scenario.base)} requests every second now travel from the first box to the last. Green boxes are relaxed, amber are busy, red are overloaded. We already gave each box enough capacity, so this design copes.`, 8000); }
+    if (demo.phase === "run") { demo.phase = "break"; guideAction({ dataset: { guide: "break" } }); return show("Now we break something on purpose", "Real systems fail, so we switch one part off while traffic is running. Watch which boxes turn red and the errors number at the bottom: this is what an outage looks like.", 8000); }
+    if (demo.phase === "break") { demo.phase = "heal"; Object.keys(chaos).forEach((k) => { chaos[k] = false; }); paintChaos(); return show("And we bring it back", "The failure is switched off and the boxes recover. Good designs keep a spare copy ready so this takes seconds, not minutes.", 6000); }
+    demoStop(true); say("That was the whole system. Now try building it yourself.");
+  }
   function paintGuide() {
     const el = $("#guidePanel"); if (!el || !guide) return;
     const { done } = guideStatus(), lv = skill || "beginner", m = (doc.guide || {}).ran ? guideSummary() : null;
     const failing = Object.keys(chaos).filter((k) => chaos[k]);
-    const sig = lv + done.join("") + (m ? Math.round(m.p95) + ":" + m.availability.toFixed(4) : "") + guide.id + failing.join();
+    const sig = lv + done.join("") + (m ? Math.round(m.p95) + ":" + m.availability.toFixed(4) : "") + guide.id + failing.join() + (demo ? demo.title : "") + doc.nodes.length + (doc.guide.watched ? "w" : "");
     if (sig === guideSig) return; guideSig = sig;
     const total = done.length, ok = done.filter(Boolean).length, cur = done.indexOf(false);
     if (lv === "beginner" && STU && cur >= 0 && guide.steps[cur].kind === "run" && !doc.guide.tidied) {
@@ -2501,7 +2557,10 @@
     const failBox = failing.length ? `<div class="g-fail"><b>Failure is on.</b> ${failing.map((k) => (FAIL[k] || [k])[0]).join(" ")} Red boxes are failing and requests are lost (see <i>errors now</i> at the bottom right).<p><b>How real systems survive it:</b> ${failing.map((k) => (FAIL[k] || [, ""])[1]).join(" ")}</p><div class="g-act"><button type="button" data-guide="heal">Stop the failure</button></div></div>` : "";
     el.innerHTML = `<header class="g-head"><span class="g-level">${esc((LEVELS.find(([k]) => k === lv) || [, ""])[1])}</span><h2>Rebuild: ${esc(guide.name)}</h2>
         <div class="g-bar" role="progressbar" aria-valuemin="0" aria-valuemax="${total}" aria-valuenow="${ok}"><i style="width:${Math.round(100 * ok / total)}%"></i></div><small>${ok} of ${total} done</small></header>
-      ${goal}${failBox}${list}
+      ${demo ? `<div class="g-watch live" aria-live="polite"><small>Watching: we build it, you look</small><b>${esc(demo.title)}</b><p>${esc(demo.text)}</p><div class="g-act"><button type="button" data-guide="watchstop">Stop and build it myself</button></div></div>`
+        : doc.guide.watched && !doc.guide.tried && cur >= 0 ? `<div class="g-watch"><b>You have seen the whole system.</b><p>Now build it yourself: the steps below tell you what to add next, and “Do it for me” is there if you get stuck.</p><div class="g-act"><button type="button" class="primary-sm" data-guide="tryself">Clear it and build it myself</button><button type="button" data-guide="watch">Watch again</button></div></div>`
+        : !doc.nodes.length && !doc.guide.tried ? `<div class="g-watch"><b>New to this? Watch first.</b><p>We build this system for you, one box at a time, and explain every step in plain words. Then it is your turn.</p><div class="g-act"><button type="button" class="primary-sm" data-guide="watch">▶ Watch it being built</button></div></div>` : ""}
+      ${goal}${demo ? "" : failBox}${list}
       ${cur < 0 ? `<div class="g-done"><b>Well done!</b><p>You rebuilt the ${esc(guide.name)}, ran it, broke it and got a review. Try the next system, or move up a level at the top of the page.</p></div>` : ""}
       <footer class="g-foot"><button type="button" data-guide="peek">Peek at the reference</button><button type="button" data-guide="fresh">Start over</button></footer>`;
     const nowEl = el.querySelector(".g-fail") || el.querySelector("li.now");   // keep the failure note or current step visible without scrolling the page around the frame
@@ -2509,6 +2568,9 @@
   }
   function guideAction(t) {
     const a = t.dataset.guide, s = guide && guide.steps[+t.dataset.i], map = guide ? guideMap() : {};
+    if (a === "watch") { demoStop(false); demoStart(); return; }
+    if (a === "watchstop") { demoStop(false); say("Stopped. Carry on from the current step, or press Start over."); return; }
+    if (a === "tryself") { doc.nodes = []; doc.edges = []; doc.guide = { id: guide.id, watched: true, tried: true }; stop(); view = { x: 40, y: 20, z: 1 }; commit(); guideSig = ""; paintGuide(); return; }
     if (a === "peek") { try { window.parent.postMessage({ type: "archlab-open-reference" }, "*"); } catch (e) { /* ignore */ } return; }
     if (a === "fresh") { if (!window.confirm("Clear your canvas and start this system again?")) return; doc.nodes = []; doc.edges = []; doc.guide = { id: guide.id }; stop(); view = { x: 40, y: 20, z: 1 }; commit(); guideSig = ""; paintGuide(); return; }
     if (a === "run") { if (!running) start(); return; }

@@ -663,9 +663,17 @@
         <div class="lp-levels">${LEARN_LEVELS.map(([k, l, d]) => `<button type="button" data-learn-level="${k}"><b>${l}</b><span>${d}</span><em>${examples.filter(([id]) => EX_LEVEL[id] === k).map(([, t]) => esc(t)).join(" · ")}</em></button>`).join("")}</div></div></section>`;
       return;
     }
-    if (EX_LEVEL[practiceExample] !== lvl) practiceExample = (examples.find(([id]) => EX_LEVEL[id] === lvl) || examples[0])[0];
+    // The whole example library (same list and ids as Real Play: x0, x1, ...) can be practised with the same guide.
+    const LIB = (window.LabExamples ? window.LabExamples.LIST : []).map((e, i) => ["x" + i, e.name, e.notice, e.notice, e.cat]);
+    const libPick = LIB.find((x) => x[0] === practiceExample);
+    if (!libPick && EX_LEVEL[practiceExample] !== lvl) practiceExample = (examples.find(([id]) => EX_LEVEL[id] === lvl) || examples[0])[0];
     const mine = examples.filter(([id]) => EX_LEVEL[id] === lvl);
-    const current = examples.find((x) => x[0] === practiceExample), idx = mine.indexOf(current);
+    const current = libPick || examples.find((x) => x[0] === practiceExample), idx = mine.indexOf(current);
+    const FIRST = "Classic interview systems", cats = [FIRST].concat([...new Set(LIB.map((x) => x[4]))].filter((c) => c !== FIRST)).filter((c) => LIB.some((x) => x[4] === c));
+    const libBtn = ([id, title, description]) => `<button type="button" class="lp-lib-item" data-practice-pick="${id}" data-find="${esc((title + " " + description).toLowerCase())}" aria-pressed="${id === practiceExample}"><b>${esc(title)}</b><span>${esc(description)}</span></button>`;
+    const libraryHtml = `<div class="lp-lib" role="dialog" aria-label="All systems" hidden><div class="lp-lib-head"><b>All ${LIB.length + examples.length} systems</b><input type="search" id="lpLibQ" placeholder="Search: chat, payments, video, search…" aria-label="Search systems"><button type="button" class="ghost" data-toggle-practice-library="1">Close</button></div>
+      <p class="lp-lib-note">Pick any system. Each one gets the same guide: add the parts, connect them, send traffic, break it, fix it. New here? Open one and press <b>Watch it being built</b>.</p>
+      <div class="lp-lib-body"><section><h3>Start here (your level)</h3><div class="lp-lib-grid">${mine.map(libBtn).join("")}</div></section>${cats.map((c) => `<section><h3>${esc(c)}</h3><div class="lp-lib-grid">${LIB.filter((x) => x[4] === c).map(libBtn).join("")}</div></section>`).join("")}<p class="lp-lib-empty" hidden>No system matches that search.</p></div></div>`;
     const refSrc = `sandbox.html?reference=1&example=${practiceExample}${lvl === "advanced" ? "" : "&core=1"}&embed=${embedded ? "control-room" : "none"}`;
     currentRef = { src: refSrc, title: current[1] };
     $title.textContent = "Reference practice"; $back.hidden = directPractice; $total.textContent = "";
@@ -677,11 +685,12 @@
     $app.innerHTML = `<section class="practice-shell lp lp-${layout}">
       <header class="lp-top">
         <div class="lp-seg lp-level" role="group" aria-label="Your level">${LEARN_LEVELS.map(([k, l]) => `<button type="button" data-learn-level="${k}" aria-pressed="${lvl === k}">${l}</button>`).join("")}</div>
-        <div class="lp-strip" role="radiogroup" aria-label="Pick a system">${mine.map(([id, title, description], i) => `<button type="button" role="radio" aria-checked="${id === practiceExample}" class="lp-chip" data-practice-pick="${id}" title="${esc(description)}"><small>${i + 1}</small>${esc(title)}</button>`).join("")}</div>
+        <div class="lp-strip" role="radiogroup" aria-label="Pick a system">${mine.map(([id, title, description], i) => `<button type="button" role="radio" aria-checked="${id === practiceExample}" class="lp-chip" data-practice-pick="${id}" title="${esc(description)}"><small>${i + 1}</small>${esc(title)}</button>`).join("")}${libPick ? `<button type="button" role="radio" aria-checked="true" class="lp-chip" title="${esc(libPick[2])}"><small>★</small>${esc(libPick[1])}</button>` : ""}<button type="button" class="lp-chip lp-all" data-toggle-practice-library="1" title="Browse and search every system">All ${LIB.length + examples.length} systems ▾</button></div>
         <div class="lp-tools"><div class="lp-seg" role="group" aria-label="Layout">${LAYOUTS.map(([k, label, tip]) => `<button type="button" data-lp-layout="${k}" aria-pressed="${layout === k}" title="${tip}">${label}</button>`).join("")}</div><button type="button" class="lp-icon" data-lp-full="1" title="Full screen (Esc to leave)" aria-label="Full screen">⛶</button><button class="primary practice-review" data-practice-review="1">Review my design</button></div>
       </header>
+      ${libraryHtml}
       <div class="lp-work" id="lpWork">
-        <aside class="lp-ref" aria-label="Reference design"><div class="lp-ref-head"><b>Reference: ${esc(current[1])}</b><span>${esc(current[2])} (system ${idx + 1} of ${mine.length} at this level)</span></div><div class="practice-reference-canvas">${refFrame}</div><div class="practice-reference-learn">${notes}</div></aside>
+        <aside class="lp-ref" aria-label="Reference design"><div class="lp-ref-head"><b>Reference: ${esc(current[1])}</b><span>${esc(current[2])} ${libPick ? "(" + esc(libPick[4]) + ")" : `(system ${idx + 1} of ${mine.length} at this level)`}</span></div><div class="practice-reference-canvas">${refFrame}</div><div class="practice-reference-learn">${notes}</div></aside>
         <section class="practice-draw lp-build" aria-label="Your canvas">
           <iframe id="practiceBoard" class="practice-board" src="${boardSrc}" title="Your architecture canvas" allow="fullscreen"></iframe>
         </section>
@@ -746,7 +755,11 @@
       return;
     }
     if (t.id === "referenceDialogClose") { const dlg = document.getElementById("referenceDialog"); if (dlg) dlg.close(); return; }
-    if (t.dataset.togglePracticeLibrary) { practiceLibraryOpen = !practiceLibraryOpen; return render(); }
+    if (t.dataset.togglePracticeLibrary) {
+      const lib = document.querySelector(".lp-lib");      // shown and hidden in place: re-rendering would reload the practice canvas
+      if (lib) { lib.hidden = !lib.hidden; if (!lib.hidden) { const q = document.getElementById("lpLibQ"); if (q) q.focus(); } return; }
+      practiceLibraryOpen = !practiceLibraryOpen; return render();
+    }
     if (t.dataset.practicePick) { practiceExample = t.dataset.practicePick; referenceVisible = true; practiceLibraryOpen = false; return render(); }
     if (t.dataset.toggleReference) { referenceVisible = !referenceVisible; return render(); }
     if (t.dataset.practiceReview) { const board = document.getElementById("practiceBoard"); if (board && board.contentWindow) board.contentWindow.postMessage({ type: "archlab-review" }, "*"); flash(t, "Reviewing your canvas…"); return; }
@@ -840,6 +853,17 @@
       if (refFrame && refFrame.contentWindow) refFrame.contentWindow.location.reload();
     }
   }, true);
+  document.addEventListener("input", (e) => {
+    if (!e.target || e.target.id !== "lpLibQ") return;
+    const words = e.target.value.toLowerCase().split(/\s+/).filter(Boolean); let any = false;
+    document.querySelectorAll(".lp-lib section").forEach((sec) => {
+      let shown = 0;
+      sec.querySelectorAll(".lp-lib-item").forEach((b) => { const hit = words.every((w) => b.dataset.find.includes(w)); b.hidden = !hit; if (hit) shown += 1; });
+      sec.hidden = !shown; if (shown) any = true;
+    });
+    const empty = document.querySelector(".lp-lib-empty"); if (empty) empty.hidden = any;
+  });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") { const lib = document.querySelector(".lp-lib"); if (lib && !lib.hidden) lib.hidden = true; } });
   document.addEventListener("change", (e) => {
     if (e.target && e.target.dataset && e.target.dataset.practiceExample) { practiceExample = e.target.value; referenceVisible = true; return render(); }
     if (e.target.dataset && e.target.dataset.autowire) { autoWire = e.target.checked; return; }
