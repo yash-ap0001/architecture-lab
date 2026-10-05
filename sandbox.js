@@ -797,8 +797,24 @@
   async function aiReview() {
     if (reviewBusy) return; reviewBusy = true; reviewText = "Reviewing this architecture with the local mentor (about 20 to 60 seconds)…"; renderReviewSurface();
     try { const r = await memoryApi("/api/architecture-lab/review", { facts: reviewFacts(), level: skill || "" }); reviewText = r.review; noteGuide("reviewed"); }
-    catch (err) { reviewText = "The mentor review could not run: " + err.message; }
+    catch (err) {
+      if (memoryOn) reviewText = "The mentor review could not run: " + err.message;
+      else { reviewText = builtInReview(); noteGuide("reviewed"); }   // online copy: no AI model, so the design checks answer instead
+    }
     reviewBusy = false; renderReviewSurface();
+  }
+  /* Review without a model: the simulated numbers against the goal, then the top findings of the design checks. */
+  function builtInReview() {
+    const r = S.run(graphForSim(), doc.scenario, []), m = r.error ? null : r.summary, l = lintNow(), out = [];
+    out.push("This online copy has no AI mentor, so this review comes from the simulator and the built-in design checks.");
+    if (m) {
+      const fast = m.p95 <= +doc.slo.p95, up = m.availability * 100 >= +doc.slo.avail;
+      out.push(`**Numbers:** p95 ${Math.round(m.p95)} ms (goal ${doc.slo.p95} ms: ${fast ? "met" : "missed"}), availability ${(m.availability * 100).toFixed(2)}% (goal ${doc.slo.avail}%: ${up ? "met" : "missed"}).`);
+    }
+    const top = l ? l.findings.filter((f) => f.sev !== "info").slice(0, 5) : [];
+    if (top.length) { out.push("**Fix in this order:**"); top.forEach((f, i) => out.push(`${i + 1}. ${f.title} (${SEV_LABEL[f.sev] || f.sev}). ${f.fix || ""}`)); }
+    else out.push("**Checks:** nothing important was found in this design.");
+    return out.join("\n\n");
   }
   window.addEventListener("message", (event) => {
     if (!event.data || event.data.type !== "archlab-review" || referenceMode) return;
