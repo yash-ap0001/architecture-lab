@@ -761,7 +761,7 @@
   }
   // ---- AI design review (local model, needs the YashAI Control Room copy of the Lab)
   let memoryOn = false, reviewText = "", reviewBusy = false;
-  fetch("/api/architecture-lab/projects").then((r) => { memoryOn = r.ok; if (memoryOn) { if (tab === "live") renderLive(); } }).catch(() => { memoryOn = false; });
+  fetch("/api/architecture-lab/projects").then((r) => { memoryOn = r.ok; if (memoryOn) { if (tab === "live") renderLive(); try { renderArchitect(); } catch (e) { /* panel not built yet */ } } }).catch(() => { memoryOn = false; });
   function runFacts(events) {
     const run = S.run(graphForSim(), doc.scenario, events); if (run.error) return null;
     const st = run.st, s = run.summary, peak = st.history.reduce((m, x) => (x.rps > m.rps ? x : m), st.history[0]);
@@ -795,7 +795,7 @@
   }
   function renderReviewSurface() { renderArchitect(); if (tab === "live") renderLive(); }
   async function aiReview() {
-    if (reviewBusy) return; reviewBusy = true; reviewText = "Reviewing this architecture with the local mentor (about 20 to 60 seconds)…"; renderReviewSurface();
+    if (reviewBusy) return; reviewBusy = true; reviewText = memoryOn ? "Reviewing this architecture with the local mentor (about 20 to 60 seconds)…" : "Reviewing this design…"; renderReviewSurface();
     try { const r = await memoryApi("/api/architecture-lab/review", { facts: reviewFacts(), level: skill || "" }); reviewText = r.review; noteGuide("reviewed"); }
     catch (err) {
       if (memoryOn) reviewText = "The mentor review could not run: " + err.message;
@@ -876,13 +876,13 @@
   function renderArchitect() {
     const el = $("#tab-architect");
     if (guide) {   // guided practice: the AI tab is only the mentor review, not the product-brief generator
-      el.innerHTML = `<section class="architect-mentor"><div><span class="architect-kicker">MENTOR REVIEW</span><h3>What is good, what to improve</h3><p>The local mentor reads your canvas and its simulation numbers. It takes 20 to 60 seconds.</p></div><button class="architect-mentor-btn" data-act="mentorReview" ${reviewBusy ? "disabled" : ""}>${reviewBusy ? "Reviewing design…" : "✦ Review my design"}</button>${reviewText ? `<div class="architect-mentor-answer">${mdLite(reviewText)}</div>` : ""}</section>`;
+      el.innerHTML = `<section class="architect-mentor"><div><span class="architect-kicker">MENTOR REVIEW</span><h3>What is good, what to improve</h3><p>${memoryOn ? "The local mentor reads your canvas and its simulation numbers. It takes 20 to 60 seconds." : "Your design is checked against its simulation numbers and the built-in design checks."}</p></div><button class="architect-mentor-btn" data-act="mentorReview" ${reviewBusy ? "disabled" : ""}>${reviewBusy ? "Reviewing design…" : "✦ Review my design"}</button>${reviewText ? `<div class="architect-mentor-answer">${mdLite(reviewText)}</div>` : ""}</section>`;
       return;
     }
     const progress = architectBusy ? `<div class="architect-progress"><i></i><span>Turning your brief into a validated starter architecture…</span></div>` : "";
     const error = architectResult && architectResult.error ? `<div class="architect-error">${esc(architectResult.error)}</div>` : "";
-    el.innerHTML = `<div class="architect-hero"><span class="architect-kicker">LOCAL AI WORKSPACE</span><h2>Turn a product idea into a reviewable system design.</h2><p>Set the product intent, let local AI draft the system, then inspect every service, flow, risk, and delivery gate on the canvas.</p><ol class="architect-steps"><li class="active"><b>1</b><span>Frame</span></li><li><b>2</b><span>Generate</span></li><li><b>3</b><span>Inspect</span></li><li><b>4</b><span>Freeze</span></li></ol></div>
-      <section class="architect-brief"><div class="architect-section-head"><div><span class="architect-step-label">STEP 1</span><h3>Frame the product</h3><p>Who uses it, what they do, and the scale you expect.</p></div><span class="architect-private">◉ Local only</span></div>
+    el.innerHTML = `<div class="architect-hero"><span class="architect-kicker">${memoryOn ? "LOCAL AI WORKSPACE" : "AI WORKSPACE"}</span><h2>Turn a product idea into a reviewable system design.</h2><p>Set the product intent, let ${memoryOn ? "local AI" : "AI"} draft the system, then inspect every service, flow, risk, and delivery gate on the canvas.</p><ol class="architect-steps"><li class="active"><b>1</b><span>Frame</span></li><li><b>2</b><span>Generate</span></li><li><b>3</b><span>Inspect</span></li><li><b>4</b><span>Freeze</span></li></ol></div>
+      <section class="architect-brief"><div class="architect-section-head"><div><span class="architect-step-label">STEP 1</span><h3>Frame the product</h3><p>Who uses it, what they do, and the scale you expect.</p></div><span class="architect-private">◉ ${memoryOn ? "Local only" : "Online AI"}</span></div>
         <label class="architect-label" for="architectPrompt">Describe the app</label><textarea id="architectPrompt" data-architect-input rows="7" placeholder="Example: Candidates upload a resume, search worldwide jobs, and receive a ranked daily shortlist. Recruiters post jobs. Start with 10,000 users and daily imports.">${esc(architectDraft)}</textarea>
         <div class="architect-guidance"><span>Include: users</span><span>main action</span><span>expected scale</span></div>
         <button class="architect-improve" data-act="improveArchitect">✦ Improve this brief</button>
@@ -906,7 +906,7 @@
             <label>Logs, metrics & traces<select data-architect-pref="observability" ${architectMode === "ai" ? "disabled" : ""}><option value="yes" ${architectPrefs.observability === "yes" ? "selected" : ""}>Required</option><option value="no" ${architectPrefs.observability === "no" ? "selected" : ""}>Not required</option></select></label>
           ${architectMode === "ai" ? `</div></details>` : `</div>`}
         </section>
-        <div class="architect-generate-wrap"><div><span class="architect-step-label">STEP 2</span><b>Generate the system canvas</b><small>Creates a starter design locally. You stay in control of every choice.</small></div><button class="architect-generate" data-act="runArchitect" ${architectBusy ? "disabled" : ""}><span>✦</span>${architectBusy ? "Designing the complete system…" : "Generate complete system design"}</button></div>${progress}
+        <div class="architect-generate-wrap"><div><span class="architect-step-label">STEP 2</span><b>Generate the system canvas</b><small>${memoryOn ? "Creates a starter design locally." : "Creates a starter design with AI."} You stay in control of every choice.</small></div><button class="architect-generate" data-act="runArchitect" ${architectBusy ? "disabled" : ""}><span>✦</span>${architectBusy ? "Designing the complete system…" : "Generate complete system design"}</button></div>${progress}
       </section>
       <section class="architect-contract"><b>What you will get</b><span>Validated components</span><span>End-to-end flows</span><span>Transaction strategy</span><span>Patterns & risks</span><span>Scale & reliability plan</span><span>Build & deploy handoff</span></section><button class="architect-improve" data-act="openDelivery">Open build &amp; deploy workspace</button>${error}${architectProposal()}${mentorMarkup()}`;
   }
@@ -2414,7 +2414,7 @@
     steps.push({ kind: "run", title: "Press ▶ Start to send traffic", why: `The simulator sends about ${num(ref.scenario.base)} requests per second through your design. Boxes turn green, amber or red by how busy they are.` });
     steps.push({ kind: "fit", title: "Make it handle the load", why: `Goal: 95% of requests answered within ${ref.slo.p95} ms and at least ${ref.slo.avail}% of them working. If a box is red, click it and raise Instances (for a database: Read replicas for reads, Shards for writes).` });
     steps.push({ kind: "break", title: "Break something on purpose", why: "Real systems fail. Inject a failure while traffic runs and watch which boxes suffer and whether the design recovers." });
-    steps.push({ kind: "review", title: "Ask the mentor to review it", why: "The local mentor reads your design and its simulation numbers and explains what is good and what to improve." });
+    steps.push({ kind: "review", title: "Ask the mentor to review it", why: "The mentor reads your design and its simulation numbers and explains what is good and what to improve." });
     return { id: p.id, name: ref.name || p.name, ref, steps };
   }
   function initGuide() {
